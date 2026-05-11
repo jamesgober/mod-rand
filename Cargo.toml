@@ -1,0 +1,50 @@
+[package]
+name = "mod-rand"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+readme = "README.md"
+license = "Apache-2.0"
+
+authors = [
+    "James Gober <me@jamesgober.com>"
+]
+
+description = "Tiered random number generation for Rust. Fast PRNG, process-unique seeds, and OS-backed cryptographic random in one zero-dependency library. Pick the tier appropriate to your threat model."
+
+keywords = [
+    "random",
+    "rng",
+    "prng",
+    "cryptography",
+    "xoshiro"
+]
+
+categories = [
+    "algorithms",
+    "cryptography",
+    "no-std"
+]
+
+documentation = "https://docs.rs/mod-rand"
+repository = "https://github.com/jamesgober/mod-rand"
+homepage = "https://github.com/jamesgober/mod-rand"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+
+[dev-dependencies]
+
+[features]
+default = ["std", "tier2", "tier3"]
+# Tier 1 (fast PRNG) is always available; the rest are opt-in.
+std = []
+tier2 = ["std"]
+tier3 = ["std"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
