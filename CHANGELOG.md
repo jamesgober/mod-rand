@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-05-12
+
+### Fixed
+
+- `tier1::Xoshiro256::gen_range_f64` now panics when the requested
+  span `end - start` overflows to infinity (e.g.,
+  `-f64::MAX..f64::MAX`). Previously the function checked that each
+  bound was finite but not the span, so symmetric extreme ranges could
+  return `+inf` or `NaN`. The returned value is now guaranteed finite
+  for every finite, in-range pair of bounds. Two new unit tests cover
+  the guard and the "finite span ⇒ finite output" invariant.
+
+### Documentation
+
+- README now showcases the bounded-range API alongside the headline
+  raw-draw example, and the performance table includes representative
+  bounded-range entries.
+- Rustdoc on `gen_range_f64` documents the new span-overflow panic and
+  guarantees finite output for finite, non-overflowing spans.
+
 ## [0.9.4] - 2026-05-12
 
 ### Added — bounded-range API
@@ -225,7 +245,8 @@ This was the name-claim release. The real implementations land in
 **Do not use tier3 from `v0.1.0` for security-sensitive work.** The
 placeholder is not cryptographically secure. Upgrade to `0.9.2+`.
 
-[Unreleased]: https://github.com/jamesgober/mod-rand/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-rand/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/jamesgober/mod-rand/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/jamesgober/mod-rand/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/jamesgober/mod-rand/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/mod-rand/compare/v0.9.1...v0.9.2

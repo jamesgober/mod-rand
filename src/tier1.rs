@@ -530,12 +530,13 @@ impl Xoshiro256 {
     ///
     /// The implementation draws a uniform value in `[0.0, 1.0)` via
     /// [`next_f64`](Self::next_f64) and scales it linearly into the
-    /// requested range.
+    /// requested range. The returned value is guaranteed finite.
     ///
     /// # Panics
     ///
-    /// Panics if either bound is non-finite (NaN or infinity), or if
-    /// the range is empty (`start >= end`).
+    /// Panics if either bound is non-finite (NaN or infinity), the
+    /// range is empty (`start >= end`), or the span `end - start`
+    /// overflows to infinity (e.g., `-f64::MAX..f64::MAX`).
     ///
     /// There is no `gen_range_inclusive_f64`: the probability of
     /// producing either endpoint exactly is zero for any reasonable
@@ -559,8 +560,13 @@ impl Xoshiro256 {
             "gen_range_f64: non-finite bounds {start}..{end}"
         );
         assert!(start < end, "gen_range_f64: empty range {start}..{end}");
-        let u = self.next_f64();
-        start + u * (end - start)
+        let span = end - start;
+        assert!(
+            span.is_finite(),
+            "gen_range_f64: span {start}..{end} overflows to infinity; \
+             split the range or use a smaller interval"
+        );
+        start + self.next_f64() * span
     }
 
     /// Produce a uniformly-distributed `u64` in `[0, n)`.
@@ -1038,6 +1044,26 @@ mod tests {
     fn gen_range_f64_panics_on_reverse() {
         let mut rng = Xoshiro256::seed_from_u64(1);
         let _ = rng.gen_range_f64(1.0..0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "overflows to infinity")]
+    fn gen_range_f64_panics_when_span_overflows() {
+        // Both bounds are finite, but their difference is not. Without
+        // this guard the call would return +inf or NaN for any nonzero
+        // u and -inf or NaN for u == 0.
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_f64(-f64::MAX..f64::MAX);
+    }
+
+    #[test]
+    fn gen_range_f64_output_is_finite_for_finite_span() {
+        let mut rng = Xoshiro256::seed_from_u64(0xF1_F1_F1);
+        for _ in 0..10_000 {
+            let x = rng.gen_range_f64(-1e100..1e100);
+            assert!(x.is_finite(), "got non-finite {x}");
+            assert!((-1e100..1e100).contains(&x));
+        }
     }
 
     #[test]

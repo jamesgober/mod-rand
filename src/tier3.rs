@@ -668,6 +668,7 @@ pub fn random_range_inclusive_i32(range: RangeInclusive<i32>) -> io::Result<i32>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn fill_bytes_produces_output() {
@@ -683,22 +684,21 @@ mod tests {
     }
 
     #[test]
-    fn random_u64_nonzero_majority() {
-        // A single u64 is 0 with probability 2^-64 — observing it
-        // even once in any reasonable test run indicates a bug.
-        let n = random_u64().unwrap();
-        // We can't strictly assert != 0 without a 2^-64 false-failure
-        // chance, but successive draws being equal is overwhelmingly
-        // unlikely. Verify two draws differ.
-        let m = random_u64().unwrap();
-        assert_ne!(n, m, "two u64 draws should differ");
+    fn random_u64_varies_within_small_sample() {
+        let mut seen = HashSet::with_capacity(16);
+        for _ in 0..16 {
+            seen.insert(random_u64().unwrap());
+        }
+        assert!(seen.len() > 1, "u64 output appears constant in sample");
     }
 
     #[test]
-    fn random_u32_two_draws_differ() {
-        let a = random_u32().unwrap();
-        let b = random_u32().unwrap();
-        assert_ne!(a, b);
+    fn random_u32_varies_within_small_sample() {
+        let mut seen = HashSet::with_capacity(32);
+        for _ in 0..32 {
+            seen.insert(random_u32().unwrap());
+        }
+        assert!(seen.len() > 1, "u32 output appears constant in sample");
     }
 
     #[test]

@@ -48,6 +48,25 @@ let token: String = tier3::random_hex(16)?;
 # Ok::<(), std::io::Error>(())
 ```
 
+Bounded ranges — every tier exposes a parallel family of bounded-range
+methods using Rust's range syntax (`..` half-open, `..=` inclusive).
+All variants use Lemire's "Nearly Divisionless" rejection sampling, so
+output is uniformly distributed with no modulo bias:
+
+```rust
+use mod_rand::tier1::Xoshiro256;
+use mod_rand::{tier2, tier3};
+
+let mut rng = Xoshiro256::seed_from_u64(42);
+
+let pct: u32 = rng.gen_range_u32(0..100);          // [0, 100)
+let die: u32 = rng.gen_range_inclusive_u32(1..=6); // [1, 6]
+
+let id     = tier2::range_inclusive_u32(1..=1_000);
+let secret = tier3::random_range_inclusive_u64(0..=u64::MAX)?;
+# Ok::<(), std::io::Error>(())
+```
+
 | Tier | Algorithm | Use case | Crypto-safe |
 |------|-----------|----------|-------------|
 | 1 | xoshiro256\*\* (splitmix64-seeded) | Simulation, fixtures, shuffling | No |
@@ -63,6 +82,8 @@ Microbenchmarked on x86_64 (`cargo bench`):
 | Single 64-bit value                 | ~0.6 ns  | ~20 ns   | ~35 ns            |
 | 32 random bytes                     | ~2 ns    | —        | ~55 ns            |
 | 16-byte hex token                   | —        | ~45 ns   | ~100 ns           |
+| Bounded `gen_range_u64(0..100)`     | ~0.9 ns  | ~22 ns   | ~35 ns            |
+| Die roll `..=6` (worst-case bias trap) | ~0.9 ns | ~22 ns | ~35 ns            |
 
 Tier 1 hits **~0.6 ns/u64** — better than the 1 ns/u64 target.
 Tier 3 latency on Linux/macOS is kernel-dependent; expect 100–500 ns.
@@ -82,9 +103,9 @@ Tier 3 latency on Linux/macOS is kernel-dependent; expect 100–500 ns.
 
 ```toml
 [dependencies]
-mod-rand = { version = "0.9", default-features = false }   # tier1 only, no_std
-mod-rand = { version = "0.9", features = ["tier2"] }       # + process-unique
-mod-rand = "0.9"                                             # all three tiers (default)
+mod-rand = { version = "0.9.5", default-features = false }   # tier1 only, no_std
+mod-rand = { version = "0.9.5", features = ["tier2"] }       # + process-unique
+mod-rand = "0.9.5"                                             # all three tiers (default)
 ```
 
 ## Status
