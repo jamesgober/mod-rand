@@ -8,12 +8,6 @@
   </sup>
 </h1>
 
-<h1 align="center">
-    <strong>mod-rand</strong>
-    <br>
-    <sup><sub>TIERED RANDOM NUMBER GENERATION FOR RUST</sub></sup>
-</h1>
-
 <p align="center">
     <a href="https://crates.io/crates/mod-rand"><img alt="crates.io" src="https://img.shields.io/crates/v/mod-rand.svg"></a>
     <a href="https://crates.io/crates/mod-rand"><img alt="downloads" src="https://img.shields.io/crates/d/mod-rand.svg"></a>
