@@ -12,6 +12,7 @@
     <a href="https://crates.io/crates/mod-rand"><img alt="crates.io" src="https://img.shields.io/crates/v/mod-rand.svg"></a>
     <a href="https://crates.io/crates/mod-rand"><img alt="downloads" src="https://img.shields.io/crates/d/mod-rand.svg"></a>
     <a href="https://docs.rs/mod-rand"><img alt="docs.rs" src="https://docs.rs/mod-rand/badge.svg"></a>
+    <img alt="MSRV" src="https://img.shields.io/badge/msrv-1.75%2B-blue.svg?style=flat-square" title="Rust Version">
     <a href="https://github.com/jamesgober/mod-rand/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jamesgober/mod-rand/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
@@ -49,9 +50,22 @@ let token: String = tier3::random_hex(16)?;
 
 | Tier | Algorithm | Use case | Crypto-safe |
 |------|-----------|----------|-------------|
-| 1 | xoshiro256\*\* | Simulation, fixtures, shuffling | No |
-| 2 | PID + nanos + counter mix | Tempdir names, request IDs | No |
+| 1 | xoshiro256\*\* (splitmix64-seeded) | Simulation, fixtures, shuffling | No |
+| 2 | PID + nanos + counter + Stafford-mix-13 | Tempdir names, request IDs | No |
 | 3 | OS syscall (`getrandom`/`BCryptGenRandom`/`getentropy`) | Tokens, keys, session IDs | Yes |
+
+## Performance
+
+Microbenchmarked on x86_64 (`cargo bench`):
+
+| Op                                  | Tier 1   | Tier 2   | Tier 3 (Windows) |
+|-------------------------------------|----------|----------|-------------------|
+| Single 64-bit value                 | ~0.6 ns  | ~20 ns   | ~35 ns            |
+| 32 random bytes                     | ~2 ns    | —        | ~55 ns            |
+| 16-byte hex token                   | —        | ~45 ns   | ~100 ns           |
+
+Tier 1 hits **~0.6 ns/u64** — better than the 1 ns/u64 target.
+Tier 3 latency on Linux/macOS is kernel-dependent; expect 100–500 ns.
 
 ## Why this library exists
 
@@ -61,25 +75,28 @@ let token: String = tier3::random_hex(16)?;
   guarantees you're getting.
 - **Lower MSRV than the alternatives.** Works on Rust 1.75; many
   random crates today require 1.85+.
-- **Fast.** Tier 1 is ~1ns/u64. Tier 2 is ~50ns. Tier 3 is one
+- **Fast.** Tier 1 is ~0.6 ns/u64. Tier 2 is ~20 ns. Tier 3 is one
   syscall.
 
 ## Feature flags
 
 ```toml
 [dependencies]
-mod-rand = { version = "0.1", default-features = false }   # tier1 only, no_std
-mod-rand = { version = "0.1", features = ["tier2"] }       # + process-unique
-mod-rand = "0.1"                                            # all three tiers (default)
+mod-rand = { version = "0.9", default-features = false }   # tier1 only, no_std
+mod-rand = { version = "0.9", features = ["tier2"] }       # + process-unique
+mod-rand = "0.9"                                             # all three tiers (default)
 ```
 
 ## Status
 
-`v0.1.0` is the name-claim release with placeholder implementations.
-Real algorithms (full xoshiro256\*\*, splitmix64 seeding, platform
-syscalls) land in `0.9.x`. **Do not use the cryptographic tier from
-`v0.1.0` for security-sensitive work** — the placeholder is not
-cryptographically secure.
+The `0.9.x` line ships the real algorithms — full xoshiro256\*\* with
+splitmix64 seeding (Tier 1), Stafford-mix-13 over PID + nanos +
+atomic counter (Tier 2), and direct platform syscalls
+(`getrandom(2)` / `BCryptGenRandom` / `getentropy(3)`) for Tier 3.
+The API is stable through the `0.9.x` series; `1.0` will pin it.
+
+For tier-by-tier semantics, performance targets, and guarantees,
+see [docs/API.md](docs/API.md).
 
 ## Minimum supported Rust version
 
@@ -88,3 +105,12 @@ cryptographically secure.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+
+<!-- COPYRIGHT
+---------------------------------->
+<div align="center">
+  <br>
+  <h2></h2>
+  Copyright &copy; 2026 James Gober.
+</div>

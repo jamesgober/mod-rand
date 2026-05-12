@@ -1,6 +1,6 @@
 [package]
 name = "mod-rand"
-version = "0.1.0"
+version = "0.9.3"
 edition = "2021"
 rust-version = "1.75"
 readme = "README.md"
@@ -27,8 +27,8 @@ categories = [
 ]
 
 documentation = "https://docs.rs/mod-rand"
-repository = "https://github.com/jamesgober/mod-rand"
-homepage = "https://github.com/jamesgober/mod-rand"
+repository    = "https://github.com/jamesgober/mod-rand"
+homepage      = "https://github.com/jamesgober/mod-rand"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -48,3 +48,17 @@ tier3 = ["std"]
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+[[bench]]
+name = "tier1"
+harness = false
+
+[[bench]]
+name = "tier2"
+harness = false
+required-features = ["tier2"]
+
+[[bench]]
+name = "tier3"
+harness = false
+required-features = ["tier3"]

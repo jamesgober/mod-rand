@@ -1,15 +1,14 @@
-//! Minimal example: show each tier in action.
+//! Minimal example: show all three tiers in action.
 //!
-//! Run with: `cargo run --example basic`
+//! Run with: `cargo run --release --example basic`.
 
 use mod_rand::tier1::Xoshiro256;
 
 fn main() {
-    // Tier 1: deterministic PRNG.
-    println!("Tier 1 — xoshiro256**");
+    println!("Tier 1 — xoshiro256** (deterministic)");
     let mut rng = Xoshiro256::seed_from_u64(42);
     for _ in 0..3 {
-        println!("  {:#x}", rng.next_u64());
+        println!("  {:#018x}", rng.next_u64());
     }
 
     #[cfg(feature = "tier2")]
