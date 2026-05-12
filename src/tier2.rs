@@ -23,6 +23,12 @@
 //! - Across hosts: this tier makes no claims. Use [`tier3`](crate::tier3)
 //!   when you need values unique across machines.
 //!
+//! ## Thread safety
+//!
+//! All functions in this module are thread-safe and lock-free. The
+//! shared atomic counter ensures uniqueness even under concurrent
+//! access from any number of threads.
+//!
 //! ## Performance
 //!
 //! Target <100ns per call. Cost is dominated by a `SystemTime::now()`

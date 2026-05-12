@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-05-12
+
+### Added
+
+- `tests/kat.rs` — hardcoded known-answer test vectors for Tier 1.
+  Covers `seed_from_u64` with seeds `{0, 1, 42, u64::MAX}`, the first
+  8 outputs each, plus post-`jump`/post-`long_jump` vectors for
+  seed=1. Locks in the algorithm against any future edit that
+  inadvertently changes the constants.
+- `tests/concurrency.rs` — Tier 2 uniqueness under 8-thread
+  contention (400 000 raw `unique_u64` and 160 000 `unique_name(20)`,
+  all distinct), and Tier 3 stress under multi-thread load.
+- Thread-safety notes in Tier 2 and Tier 3 module docs making the
+  guarantee explicit.
+- `.dev/AUDIT.md` — self-audit report against `DIRECTIVES.md` and
+  `REPS.md` (local-only).
+
 ## [0.9.3] - 2026-05-11
 
 ### Added
@@ -132,7 +149,8 @@ This was the name-claim release. The real implementations land in
 **Do not use tier3 from `v0.1.0` for security-sensitive work.** The
 placeholder is not cryptographically secure. Upgrade to `0.9.2+`.
 
-[Unreleased]: https://github.com/jamesgober/mod-rand/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-rand/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/jamesgober/mod-rand/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/jamesgober/mod-rand/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/mod-rand/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/jamesgober/mod-rand/compare/v0.9.0...v0.9.1

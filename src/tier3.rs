@@ -36,6 +36,13 @@
 //! - On Windows, BCryptGenRandom failures surface the NTSTATUS code
 //!   in the returned `io::Error`.
 //!
+//! ## Thread safety
+//!
+//! All functions in this module are thread-safe. The underlying
+//! syscalls (`getrandom`, `getentropy`, `BCryptGenRandom`) are
+//! documented thread-safe by their respective platforms, and the
+//! Rust-side wrappers hold no shared mutable state.
+//!
 //! ## Performance
 //!
 //! One syscall worth of overhead per call (typically 100–500ns).
