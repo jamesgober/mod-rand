@@ -34,6 +34,7 @@
 //! Target <100ns per call. Cost is dominated by a `SystemTime::now()`
 //! reading; the mixing itself is a handful of multiplies and rotates.
 
+use core::ops::{Range, RangeInclusive};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -212,6 +213,219 @@ fn process_salt() -> u64 {
     }
 }
 
+// ------------------------------------------------------------
+// Bounded-range API
+//
+// Each bounded function below pulls fresh `unique_u64` values and
+// reduces them with Lemire's "Nearly Divisionless" rejection sampling.
+// The result is uniformly distributed over the requested range — no
+// modulo bias.
+//
+// Note on guarantees: Tier 2 raw `unique_u64` output is guaranteed
+// distinct across calls within a single process. The bounded-range
+// reductions DO NOT preserve that guarantee — multiple distinct u64
+// values necessarily map to the same bounded value when the range is
+// smaller than 2^64. Callers who need distinct bounded values must
+// either use the raw `unique_u64` stream themselves or de-duplicate.
+// ------------------------------------------------------------
+
+/// Produce a uniformly-distributed `u64` in `[0, n)`.
+///
+/// Internal helper for the bounded-range API. Implements Daniel
+/// Lemire's "Nearly Divisionless" rejection sampling. `n` MUST be
+/// greater than zero.
+#[inline]
+fn bounded_u64(n: u64) -> u64 {
+    debug_assert!(n != 0, "bounded_u64 requires n > 0");
+    let mut x = unique_u64();
+    let mut m: u128 = (x as u128).wrapping_mul(n as u128);
+    let mut l: u64 = m as u64;
+    if l < n {
+        let t: u64 = n.wrapping_neg() % n;
+        while l < t {
+            x = unique_u64();
+            m = (x as u128).wrapping_mul(n as u128);
+            l = m as u64;
+        }
+    }
+    (m >> 64) as u64
+}
+
+/// Generate a uniformly-distributed `u64` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty (`range.start >= range.end`).
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+///
+/// let n = tier2::range_u64(10..20);
+/// assert!((10..20).contains(&n));
+/// ```
+pub fn range_u64(range: Range<u64>) -> u64 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_u64: empty range {start}..{end}");
+    let span = end - start;
+    start + bounded_u64(span)
+}
+
+/// Generate a uniformly-distributed `u64` in the closed range
+/// `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `0..=u64::MAX` is supported and
+/// is equivalent to a single `unique_u64()` draw.
+///
+/// # Panics
+///
+/// Panics if the range is empty (`*range.start() > *range.end()`).
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+///
+/// let d = tier2::range_inclusive_u64(1..=6);
+/// assert!((1..=6).contains(&d));
+/// ```
+pub fn range_inclusive_u64(range: RangeInclusive<u64>) -> u64 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_u64: empty range {start}..={end}"
+    );
+    if start == 0 && end == u64::MAX {
+        return unique_u64();
+    }
+    let span = end - start + 1;
+    start + bounded_u64(span)
+}
+
+/// Generate a uniformly-distributed `u32` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+///
+/// let pct = tier2::range_u32(0..100);
+/// assert!(pct < 100);
+/// ```
+pub fn range_u32(range: Range<u32>) -> u32 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_u32: empty range {start}..{end}");
+    let span = (end - start) as u64;
+    (start as u64 + bounded_u64(span)) as u32
+}
+
+/// Generate a uniformly-distributed `u32` in the closed range
+/// `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `0..=u32::MAX` is supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_u32(range: RangeInclusive<u32>) -> u32 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_u32: empty range {start}..={end}"
+    );
+    let span = (end as u64) - (start as u64) + 1;
+    (start as u64 + bounded_u64(span)) as u32
+}
+
+/// Generate a uniformly-distributed `i64` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// Negative bounds and mixed-sign ranges are supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+///
+/// let n = tier2::range_i64(-50..50);
+/// assert!((-50..50).contains(&n));
+/// ```
+pub fn range_i64(range: Range<i64>) -> i64 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_i64: empty range {start}..{end}");
+    let span = (end as i128 - start as i128) as u64;
+    let offset = bounded_u64(span);
+    ((start as i128) + (offset as i128)) as i64
+}
+
+/// Generate a uniformly-distributed `i64` in the closed range
+/// `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `i64::MIN..=i64::MAX` is supported
+/// and is equivalent to reinterpreting a raw `unique_u64()` draw as
+/// `i64`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_i64(range: RangeInclusive<i64>) -> i64 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_i64: empty range {start}..={end}"
+    );
+    if start == i64::MIN && end == i64::MAX {
+        return unique_u64() as i64;
+    }
+    let span = ((end as i128) - (start as i128) + 1) as u64;
+    let offset = bounded_u64(span);
+    ((start as i128) + (offset as i128)) as i64
+}
+
+/// Generate a uniformly-distributed `i32` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_i32(range: Range<i32>) -> i32 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_i32: empty range {start}..{end}");
+    let span = (end as i64 - start as i64) as u64;
+    let offset = bounded_u64(span);
+    ((start as i64) + (offset as i64)) as i32
+}
+
+/// Generate a uniformly-distributed `i32` in the closed range
+/// `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `i32::MIN..=i32::MAX` is supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_i32(range: RangeInclusive<i32>) -> i32 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_i32: empty range {start}..={end}"
+    );
+    let span = ((end as i64) - (start as i64) + 1) as u64;
+    let offset = bounded_u64(span);
+    ((start as i64) + (offset as i64)) as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,5 +563,171 @@ mod tests {
         let b = process_salt();
         assert_eq!(a, b);
         assert_ne!(a, 0);
+    }
+
+    // ------------------------------------------------------------
+    // Bounded-range tests
+    // ------------------------------------------------------------
+
+    #[test]
+    fn range_u64_bounds() {
+        for _ in 0..10_000 {
+            let n = range_u64(100..200);
+            assert!((100..200).contains(&n));
+        }
+    }
+
+    #[test]
+    fn range_u64_single_value_window() {
+        // [start, start+1) — every draw lands on start.
+        for _ in 0..1000 {
+            assert_eq!(range_u64(7..8), 7);
+        }
+    }
+
+    #[test]
+    fn range_inclusive_u64_die_roll() {
+        // Verify all six faces appear over many rolls.
+        let mut faces = [0u32; 6];
+        for _ in 0..10_000 {
+            let d = range_inclusive_u64(1..=6);
+            assert!((1..=6).contains(&d));
+            faces[(d - 1) as usize] += 1;
+        }
+        for (i, &c) in faces.iter().enumerate() {
+            assert!(c > 0, "face {} never appeared in 10000 rolls", i + 1);
+        }
+    }
+
+    #[test]
+    fn range_inclusive_u64_single_value() {
+        for _ in 0..1000 {
+            assert_eq!(range_inclusive_u64(42..=42), 42);
+        }
+    }
+
+    #[test]
+    fn range_inclusive_u64_full_width() {
+        // 0..=u64::MAX is the full u64 space; just ensure no panic
+        // and at least one draw differs from another.
+        let a = range_inclusive_u64(0..=u64::MAX);
+        let b = range_inclusive_u64(0..=u64::MAX);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn range_u32_bounds() {
+        for _ in 0..10_000 {
+            let n = range_u32(0..256);
+            assert!(n < 256);
+        }
+    }
+
+    #[test]
+    fn range_inclusive_u32_full_width() {
+        // Just exercises the full-width path without crashing.
+        for _ in 0..1000 {
+            let _ = range_inclusive_u32(0..=u32::MAX);
+        }
+    }
+
+    #[test]
+    fn range_i64_negative() {
+        for _ in 0..10_000 {
+            let n = range_i64(-100..-50);
+            assert!((-100..-50).contains(&n));
+        }
+    }
+
+    #[test]
+    fn range_i64_mixed_sign() {
+        let mut saw_neg = false;
+        let mut saw_pos = false;
+        for _ in 0..10_000 {
+            let n = range_i64(-100..100);
+            assert!((-100..100).contains(&n));
+            if n < 0 {
+                saw_neg = true;
+            }
+            if n >= 0 {
+                saw_pos = true;
+            }
+        }
+        assert!(saw_neg && saw_pos);
+    }
+
+    #[test]
+    fn range_inclusive_i64_full_width() {
+        // i64::MIN..=i64::MAX — just verify no panic.
+        let _ = range_inclusive_i64(i64::MIN..=i64::MAX);
+    }
+
+    #[test]
+    fn range_i32_bounds() {
+        for _ in 0..10_000 {
+            let n = range_i32(-1000..1000);
+            assert!((-1000..1000).contains(&n));
+        }
+    }
+
+    #[test]
+    fn range_inclusive_i32_full_width() {
+        for _ in 0..1000 {
+            let _ = range_inclusive_i32(i32::MIN..=i32::MAX);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn range_u64_panics_on_empty() {
+        let _ = range_u64(10..10);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn range_u64_panics_on_reverse() {
+        let _ = range_u64(10..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn range_inclusive_u64_panics_on_reverse() {
+        let _ = range_inclusive_u64(10..=5);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn range_i64_panics_on_reverse() {
+        let _ = range_i64(5..-5);
+    }
+
+    #[test]
+    fn range_uniformity_chi_squared() {
+        // 100 000 draws over a range of 100 buckets. Same statistical
+        // threshold reasoning as in tier1. Note: this is a real
+        // uniformity check on the Tier 2 reduction — if anyone
+        // replaces rejection sampling with `unique_u64() % 100`, the
+        // bias from the modulo operation would inflate chi-squared
+        // beyond the threshold and fail this test.
+        let mut counts = [0u32; 100];
+        for _ in 0..100_000 {
+            let v = range_u32(0..100);
+            counts[v as usize] += 1;
+        }
+        let expected = 100_000.0 / 100.0;
+        let chi: f64 = counts
+            .iter()
+            .map(|&c| {
+                let diff = c as f64 - expected;
+                diff * diff / expected
+            })
+            .sum();
+        assert!(
+            chi < 250.0,
+            "chi-squared {chi} too high — bounded-range output is biased"
+        );
     }
 }

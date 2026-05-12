@@ -49,6 +49,7 @@
 //! Amortize by reading 32 or 64 bytes at a time for token generation
 //! rather than one byte at a time.
 
+use core::ops::{Range, RangeInclusive};
 use std::io;
 
 mod sys {
@@ -415,6 +416,255 @@ pub fn random_base32(chars: usize) -> io::Result<String> {
     Ok(out)
 }
 
+// ------------------------------------------------------------
+// Bounded-range API
+//
+// Every bounded function below pulls a fresh `u64` from the OS CSPRNG
+// and reduces it with Lemire's "Nearly Divisionless" rejection
+// sampling. The result is uniformly distributed over the requested
+// range with no modulo bias.
+//
+// Each rejected draw is a fresh syscall (or a fresh `/dev/urandom`
+// read on the Linux ENOSYS fallback path). The rejection rate is
+// approximately `n / 2^64` per draw, so for any range smaller than
+// half the u64 space, the expected syscall count per call is
+// effectively 1.
+//
+// Invalid ranges (empty / reversed) return
+// `io::Error` with `ErrorKind::InvalidInput` rather than panicking,
+// matching the rest of the Tier 3 fallible API.
+// ------------------------------------------------------------
+
+/// Produce a uniformly-distributed `u64` in `[0, n)`.
+///
+/// Internal helper. `n` MUST be greater than zero; the public wrappers
+/// enforce this. Returns `io::Error` only if the underlying
+/// `random_u64()` call fails.
+#[inline]
+fn bounded_u64(n: u64) -> io::Result<u64> {
+    debug_assert!(n != 0, "bounded_u64 requires n > 0");
+    let mut x = random_u64()?;
+    let mut m: u128 = (x as u128).wrapping_mul(n as u128);
+    let mut l: u64 = m as u64;
+    if l < n {
+        let t: u64 = n.wrapping_neg() % n;
+        while l < t {
+            x = random_u64()?;
+            m = (x as u128).wrapping_mul(n as u128);
+            l = m as u64;
+        }
+    }
+    Ok((m >> 64) as u64)
+}
+
+/// Helper: build an `InvalidInput` error for empty ranges.
+#[inline]
+fn empty_range_error(msg: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, msg)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u64` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// Uses Lemire's "Nearly Divisionless" rejection sampling so the
+/// output is genuinely uniform — there is no modulo bias.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty (`range.start >= range.end`).
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+///
+/// let n = tier3::random_range_u64(10..20)?;
+/// assert!((10..20).contains(&n));
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn random_range_u64(range: Range<u64>) -> io::Result<u64> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_u64: empty range"));
+    }
+    let span = end - start;
+    Ok(start + bounded_u64(span)?)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u64` in
+/// the closed range `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `0..=u64::MAX` is supported and is
+/// equivalent to a raw `random_u64()` call.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty (`*range.start() > *range.end()`).
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+///
+/// let d = tier3::random_range_inclusive_u64(1..=6)?;
+/// assert!((1..=6).contains(&d));
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn random_range_inclusive_u64(range: RangeInclusive<u64>) -> io::Result<u64> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_u64: empty range"));
+    }
+    if start == 0 && end == u64::MAX {
+        return random_u64();
+    }
+    let span = end - start + 1;
+    Ok(start + bounded_u64(span)?)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u32` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty.
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+///
+/// let pct = tier3::random_range_u32(0..100)?;
+/// assert!(pct < 100);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn random_range_u32(range: Range<u32>) -> io::Result<u32> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_u32: empty range"));
+    }
+    let span = (end - start) as u64;
+    Ok((start as u64 + bounded_u64(span)?) as u32)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u32` in
+/// the closed range `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `0..=u32::MAX` is supported.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty.
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+pub fn random_range_inclusive_u32(range: RangeInclusive<u32>) -> io::Result<u32> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_u32: empty range"));
+    }
+    let span = (end as u64) - (start as u64) + 1;
+    Ok((start as u64 + bounded_u64(span)?) as u32)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i64` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// Negative bounds and mixed-sign ranges are supported.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty.
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+///
+/// let n = tier3::random_range_i64(-50..50)?;
+/// assert!((-50..50).contains(&n));
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn random_range_i64(range: Range<i64>) -> io::Result<i64> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_i64: empty range"));
+    }
+    let span = (end as i128 - start as i128) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i128) + (offset as i128)) as i64)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i64` in
+/// the closed range `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `i64::MIN..=i64::MAX` is supported
+/// and is equivalent to reinterpreting a raw `random_u64()` draw as
+/// `i64`.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty.
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+pub fn random_range_inclusive_i64(range: RangeInclusive<i64>) -> io::Result<i64> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_i64: empty range"));
+    }
+    if start == i64::MIN && end == i64::MAX {
+        return random_u64().map(|u| u as i64);
+    }
+    let span = ((end as i128) - (start as i128) + 1) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i128) + (offset as i128)) as i64)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i32` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty.
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+pub fn random_range_i32(range: Range<i32>) -> io::Result<i32> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_i32: empty range"));
+    }
+    let span = (end as i64 - start as i64) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i64) + (offset as i64)) as i32)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i32` in
+/// the closed range `[range.start(), range.end()]`.
+///
+/// The full-width inclusive range `i32::MIN..=i32::MAX` is supported.
+///
+/// # Errors
+///
+/// - Returns `io::Error` with `ErrorKind::InvalidInput` if the range
+///   is empty.
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+pub fn random_range_inclusive_i32(range: RangeInclusive<i32>) -> io::Result<i32> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_i32: empty range"));
+    }
+    let span = ((end as i64) - (start as i64) + 1) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i64) + (offset as i64)) as i32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,5 +777,168 @@ mod tests {
             })
             .sum();
         assert!(chi < 500.0, "byte-frequency chi-squared {chi} too high");
+    }
+
+    // ------------------------------------------------------------
+    // Bounded-range tests
+    // ------------------------------------------------------------
+
+    #[test]
+    fn random_range_u64_bounds() {
+        for _ in 0..1000 {
+            let n = random_range_u64(100..200).unwrap();
+            assert!((100..200).contains(&n));
+        }
+    }
+
+    #[test]
+    fn random_range_u64_single_value_window() {
+        // [start, start+1) — every draw lands on start. No syscalls
+        // wasted on rejection in this case (span=1, l=0 is never < n).
+        for _ in 0..100 {
+            assert_eq!(random_range_u64(7..8).unwrap(), 7);
+        }
+    }
+
+    #[test]
+    fn random_range_inclusive_u64_die_roll_visits_all_faces() {
+        // 1000 cryptographic die rolls — all six faces must appear.
+        let mut faces = [0u32; 6];
+        for _ in 0..1000 {
+            let d = random_range_inclusive_u64(1..=6).unwrap();
+            assert!((1..=6).contains(&d));
+            faces[(d - 1) as usize] += 1;
+        }
+        for (i, &c) in faces.iter().enumerate() {
+            assert!(c > 0, "face {} never appeared in 1000 rolls", i + 1);
+        }
+    }
+
+    #[test]
+    fn random_range_inclusive_u64_single_value() {
+        for _ in 0..100 {
+            assert_eq!(random_range_inclusive_u64(42..=42).unwrap(), 42);
+        }
+    }
+
+    #[test]
+    fn random_range_inclusive_u64_full_width() {
+        // 0..=u64::MAX — full-width path. Two draws differ.
+        let a = random_range_inclusive_u64(0..=u64::MAX).unwrap();
+        let b = random_range_inclusive_u64(0..=u64::MAX).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn random_range_u32_bounds() {
+        for _ in 0..1000 {
+            let n = random_range_u32(0..256).unwrap();
+            assert!(n < 256);
+        }
+    }
+
+    #[test]
+    fn random_range_inclusive_u32_full_width() {
+        for _ in 0..100 {
+            let _ = random_range_inclusive_u32(0..=u32::MAX).unwrap();
+        }
+    }
+
+    #[test]
+    fn random_range_i64_negative() {
+        for _ in 0..1000 {
+            let n = random_range_i64(-100..-50).unwrap();
+            assert!((-100..-50).contains(&n));
+        }
+    }
+
+    #[test]
+    fn random_range_i64_mixed_sign() {
+        let mut saw_neg = false;
+        let mut saw_pos = false;
+        for _ in 0..1000 {
+            let n = random_range_i64(-100..100).unwrap();
+            assert!((-100..100).contains(&n));
+            if n < 0 {
+                saw_neg = true;
+            }
+            if n >= 0 {
+                saw_pos = true;
+            }
+        }
+        assert!(saw_neg && saw_pos);
+    }
+
+    #[test]
+    fn random_range_inclusive_i64_full_width() {
+        let _ = random_range_inclusive_i64(i64::MIN..=i64::MAX).unwrap();
+    }
+
+    #[test]
+    fn random_range_i32_bounds() {
+        for _ in 0..1000 {
+            let n = random_range_i32(-1000..1000).unwrap();
+            assert!((-1000..1000).contains(&n));
+        }
+    }
+
+    #[test]
+    fn random_range_inclusive_i32_full_width() {
+        for _ in 0..100 {
+            let _ = random_range_inclusive_i32(i32::MIN..=i32::MAX).unwrap();
+        }
+    }
+
+    #[test]
+    fn random_range_u64_empty_returns_invalid_input() {
+        let err = random_range_u64(10..10).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn random_range_u64_reverse_returns_invalid_input() {
+        let err = random_range_u64(10..5).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn random_range_inclusive_u64_reverse_returns_invalid_input() {
+        let err = random_range_inclusive_u64(10..=5).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn random_range_i64_reverse_returns_invalid_input() {
+        let err = random_range_i64(5..-5).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn random_range_uniformity_chi_squared() {
+        // 50 000 cryptographic draws over 50 buckets. Expected count
+        // per bucket: 1000. Chi-squared critical value (49 d.f.,
+        // alpha=0.001) is ~85; we use 200 to keep flake rate
+        // negligible. This is fewer draws than tier1/tier2 because
+        // each draw is a syscall.
+        let mut counts = [0u32; 50];
+        for _ in 0..50_000 {
+            let v = random_range_u32(0..50).unwrap();
+            counts[v as usize] += 1;
+        }
+        let expected = 50_000.0 / 50.0;
+        let chi: f64 = counts
+            .iter()
+            .map(|&c| {
+                let diff = c as f64 - expected;
+                diff * diff / expected
+            })
+            .sum();
+        assert!(
+            chi < 200.0,
+            "tier3 chi-squared {chi} too high — bounded-range output is biased"
+        );
     }
 }

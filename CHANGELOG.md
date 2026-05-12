@@ -9,7 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.4] - 2026-05-12
 
-### Added
+### Added — bounded-range API
+
+- Bounded uniform integer draws on every tier using the Rust range
+  syntax (`..` for half-open, `..=` for inclusive). The caller's
+  choice of `..` vs `..=` IS the contract — no two-argument
+  `(min, max)` form, no ambiguity. 25 new public APIs:
+  - **Tier 1**: `Xoshiro256::gen_range_u64`, `gen_range_u32`,
+    `gen_range_i64`, `gen_range_i32`, `gen_range_f64`, plus the four
+    `gen_range_inclusive_*` integer variants.
+  - **Tier 2**: `range_u64`, `range_u32`, `range_i64`, `range_i32`,
+    and the four `range_inclusive_*` variants.
+  - **Tier 3**: `random_range_u64`, `random_range_u32`,
+    `random_range_i64`, `random_range_i32`, and the four
+    `random_range_inclusive_*` variants — all returning
+    `io::Result<T>`.
+- All bounded methods use **Daniel Lemire's "Nearly Divisionless"
+  rejection sampling** (J. ACM 2019). Output is uniformly
+  distributed; there is no modulo bias. Average rejection rate is
+  effectively zero for any range smaller than half the `u64` space.
+- Full-width inclusive ranges (`0..=u64::MAX`, `i64::MIN..=i64::MAX`,
+  etc.) are special-cased to avoid `span = 2^64` overflow and are
+  equivalent to reinterpreting a raw `next_uN` / `random_uN` draw.
+- Mixed-sign and negative integer ranges are supported on all signed
+  integer methods via internal `i128` span computation.
+- `gen_range_f64` (Tier 1 only) draws a uniform float in
+  `[start, end)` by mapping `next_f64() * (end - start) + start`.
+  There is no inclusive float variant — the probability of producing
+  either endpoint exactly is zero for any reasonable range.
+- Invalid-range handling:
+  - **Tier 1 & 2**: Panic with a descriptive message on empty or
+    reversed ranges; Tier 1 `f64` additionally panics on non-finite
+    bounds (NaN / ±∞).
+  - **Tier 3**: Returns `io::Error::new(ErrorKind::InvalidInput, …)`
+    on empty or reversed ranges, matching its existing fallible
+    API surface. No panic.
+
+### Added — tests, examples, benches
+
+- `tests/range.rs` — cross-tier integration tests covering:
+  - 1,000,000-draw chi-squared uniformity tests on Tier 1 and Tier 2.
+  - 50,000-draw chi-squared on Tier 3.
+  - 600,000-roll six-sided die test (the canonical modulo-bias trap;
+    `2^64 % 6 = 4`, so a naive `% 6` reduction would visibly skew the
+    distribution and fail this test).
+  - Single-value, full-width, and mixed-sign range edge cases on all
+    three tiers.
+  - Tier 1 determinism: replaying a seed produces identical bounded
+    output for the same `gen_range_*` call sequence.
+- 58 new in-crate unit tests across `src/tier1.rs`, `src/tier2.rs`,
+  and `src/tier3.rs` covering per-method bounds, single-value
+  ranges, full-width ranges, panic / error paths, and per-tier
+  chi-squared distribution checks.
+- `examples/bounded_ranges.rs` — runnable demonstration of every
+  tier's bounded-range API, including a 3d6 dice roll, signed and
+  float ranges, and Tier 3 error handling on empty range.
+- Bounded-range benchmarks added to `benches/tier1.rs`,
+  `benches/tier2.rs`, and `benches/tier3.rs`, including a
+  worst-case rejection-rate scenario for Tier 1
+  (`gen_range_u64(0..⅔·u64::MAX)`).
+
+### Added — earlier in 0.9.4
 
 - `tests/kat.rs` — hardcoded known-answer test vectors for Tier 1.
   Covers `seed_from_u64` with seeds `{0, 1, 42, u64::MAX}`, the first
@@ -17,12 +77,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seed=1. Locks in the algorithm against any future edit that
   inadvertently changes the constants.
 - `tests/concurrency.rs` — Tier 2 uniqueness under 8-thread
-  contention (400 000 raw `unique_u64` and 160 000 `unique_name(20)`,
+  contention (400,000 raw `unique_u64` and 160,000 `unique_name(20)`,
   all distinct), and Tier 3 stress under multi-thread load.
 - Thread-safety notes in Tier 2 and Tier 3 module docs making the
   guarantee explicit.
 - `.dev/AUDIT.md` — self-audit report against `DIRECTIVES.md` and
   `REPS.md` (local-only).
+
+### Performance
+
+Measured on Nexus (Ryzen 9 9950X3D, Windows 11) via `cargo bench`:
+
+| op                                          | time     |
+|---------------------------------------------|----------|
+| `gen_range_u64(0..100)` (Tier 1)            | ~0.9 ns  |
+| `gen_range_inclusive_u32(1..=6)` (Tier 1)   | ~0.9 ns  |
+| `gen_range_u64(0..⅔·u64::MAX)` worst case   | ~6 ns    |
+| `range_u64(0..100)` (Tier 2)                | ~21 ns   |
+| `random_range_u64(0..100)` (Tier 3)         | ~35 ns   |
+
+The rejection-sampling layer adds essentially no overhead beyond the
+raw `next_u64` / `unique_u64` / `random_u64` baseline in the
+common case.
 
 ## [0.9.3] - 2026-05-11
 

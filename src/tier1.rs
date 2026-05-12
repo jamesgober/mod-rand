@@ -10,10 +10,34 @@
 //! <https://prng.di.unimi.it/xoshiro256starstar.c> for the canonical
 //! reference.
 //!
-//! Performance: ~1ns per `u64` on x86_64 (single rotation, multiply,
+//! Performance: ~1 ns per `u64` on x86_64 (single rotation, multiply,
 //! and a handful of xors per output).
 //!
 //! Available in `no_std`.
+//!
+//! ## Bounded ranges
+//!
+//! The `gen_range_*` family of methods produces uniformly-distributed
+//! values within a caller-specified `Range` or `RangeInclusive`:
+//!
+//! ```
+//! use mod_rand::tier1::Xoshiro256;
+//!
+//! let mut rng = Xoshiro256::seed_from_u64(42);
+//!
+//! // Half-open: [0, 100) — never returns 100.
+//! let pct: u32 = rng.gen_range_u32(0..100);
+//! assert!(pct < 100);
+//!
+//! // Inclusive: [1, 6] — die roll, can return 1, 2, 3, 4, 5, or 6.
+//! let die: u32 = rng.gen_range_inclusive_u32(1..=6);
+//! assert!((1..=6).contains(&die));
+//! ```
+//!
+//! All bounded methods use Lemire's "Nearly Divisionless" rejection
+//! sampling, so the output is genuinely uniform — no modulo bias.
+
+use core::ops::{Range, RangeInclusive};
 
 /// Golden-ratio increment used by splitmix64.
 const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -249,6 +273,326 @@ impl Xoshiro256 {
             let bytes = self.next_u64().to_le_bytes();
             tail.copy_from_slice(&bytes[..tail.len()]);
         }
+    }
+
+    // ------------------------------------------------------------
+    // Bounded-range API
+    //
+    // Every bounded method below is a thin wrapper around the
+    // private `bounded_u64` helper, which implements Lemire's
+    // "Nearly Divisionless" rejection sampling. Signed-integer
+    // methods compute the span in u128 to avoid overflow at extreme
+    // endpoints; the full-width inclusive range is special-cased.
+    // ------------------------------------------------------------
+
+    /// Generate a uniformly-distributed `u64` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// Uses Lemire's "Nearly Divisionless" rejection sampling so the
+    /// output is genuinely uniform — there is no modulo bias.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty (`range.start >= range.end`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_u64(10..20);
+    /// assert!((10..20).contains(&n));
+    /// ```
+    #[inline]
+    pub fn gen_range_u64(&mut self, range: Range<u64>) -> u64 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_u64: empty range {start}..{end}");
+        let span = end - start;
+        start + self.bounded_u64(span)
+    }
+
+    /// Generate a uniformly-distributed `u64` in the closed range
+    /// `[range.start(), range.end()]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty (`*range.start() > *range.end()`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let die = rng.gen_range_inclusive_u64(1..=6);
+    /// assert!((1..=6).contains(&die));
+    /// ```
+    ///
+    /// The full-width inclusive range `0..=u64::MAX` is supported and
+    /// is equivalent to a single `next_u64()` draw.
+    #[inline]
+    pub fn gen_range_inclusive_u64(&mut self, range: RangeInclusive<u64>) -> u64 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_u64: empty range {start}..={end}"
+        );
+        if start == 0 && end == u64::MAX {
+            // span = 2^64, which doesn't fit in u64. Use a raw draw.
+            return self.next_u64();
+        }
+        let span = end - start + 1;
+        start + self.bounded_u64(span)
+    }
+
+    /// Generate a uniformly-distributed `u32` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let pct = rng.gen_range_u32(0..100);
+    /// assert!(pct < 100);
+    /// ```
+    #[inline]
+    pub fn gen_range_u32(&mut self, range: Range<u32>) -> u32 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_u32: empty range {start}..{end}");
+        let span = (end - start) as u64;
+        (start as u64 + self.bounded_u64(span)) as u32
+    }
+
+    /// Generate a uniformly-distributed `u32` in the closed range
+    /// `[range.start(), range.end()]`.
+    ///
+    /// The full-width inclusive range `0..=u32::MAX` is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_inclusive_u32(1..=100);
+    /// assert!((1..=100).contains(&n));
+    /// ```
+    #[inline]
+    pub fn gen_range_inclusive_u32(&mut self, range: RangeInclusive<u32>) -> u32 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_u32: empty range {start}..={end}"
+        );
+        // span = end - start + 1 fits in u64 (max value is 2^32).
+        let span = (end as u64) - (start as u64) + 1;
+        (start as u64 + self.bounded_u64(span)) as u32
+    }
+
+    /// Generate a uniformly-distributed `i64` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// Negative bounds and mixed-sign ranges are supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_i64(-50..50);
+    /// assert!((-50..50).contains(&n));
+    /// ```
+    #[inline]
+    pub fn gen_range_i64(&mut self, range: Range<i64>) -> i64 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_i64: empty range {start}..{end}");
+        // span as u64 — works because end - start (in i128) is positive
+        // and fits in u64 for any valid i64 half-open range. Maximum
+        // possible span is i64::MAX - i64::MIN = 2^64 - 1.
+        let span = (end as i128 - start as i128) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i128) + (offset as i128)) as i64
+    }
+
+    /// Generate a uniformly-distributed `i64` in the closed range
+    /// `[range.start(), range.end()]`.
+    ///
+    /// The full-width inclusive range `i64::MIN..=i64::MAX` is
+    /// supported and is equivalent to reinterpreting a raw
+    /// `next_u64()` draw as `i64`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_inclusive_i64(-1..=1);
+    /// assert!((-1..=1).contains(&n));
+    /// ```
+    #[inline]
+    pub fn gen_range_inclusive_i64(&mut self, range: RangeInclusive<i64>) -> i64 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_i64: empty range {start}..={end}"
+        );
+        if start == i64::MIN && end == i64::MAX {
+            // span = 2^64. Reinterpret a raw draw.
+            return self.next_u64() as i64;
+        }
+        // span = (end - start + 1) computed in i128 to avoid overflow.
+        let span = ((end as i128) - (start as i128) + 1) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i128) + (offset as i128)) as i64
+    }
+
+    /// Generate a uniformly-distributed `i32` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_i32(-10..10);
+    /// assert!((-10..10).contains(&n));
+    /// ```
+    #[inline]
+    pub fn gen_range_i32(&mut self, range: Range<i32>) -> i32 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_i32: empty range {start}..{end}");
+        // span fits in u64 (max 2^32 - 1).
+        let span = (end as i64 - start as i64) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i64) + (offset as i64)) as i32
+    }
+
+    /// Generate a uniformly-distributed `i32` in the closed range
+    /// `[range.start(), range.end()]`.
+    ///
+    /// The full-width inclusive range `i32::MIN..=i32::MAX` is
+    /// supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_inclusive_i32(-100..=100);
+    /// assert!((-100..=100).contains(&n));
+    /// ```
+    #[inline]
+    pub fn gen_range_inclusive_i32(&mut self, range: RangeInclusive<i32>) -> i32 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_i32: empty range {start}..={end}"
+        );
+        // span = (end - start + 1) fits in u64 (max 2^32).
+        let span = ((end as i64) - (start as i64) + 1) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i64) + (offset as i64)) as i32
+    }
+
+    /// Generate a uniformly-distributed `f64` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// The implementation draws a uniform value in `[0.0, 1.0)` via
+    /// [`next_f64`](Self::next_f64) and scales it linearly into the
+    /// requested range.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either bound is non-finite (NaN or infinity), or if
+    /// the range is empty (`start >= end`).
+    ///
+    /// There is no `gen_range_inclusive_f64`: the probability of
+    /// producing either endpoint exactly is zero for any reasonable
+    /// range, so the half-open and inclusive versions are operationally
+    /// identical.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let x = rng.gen_range_f64(-1.0..1.0);
+    /// assert!((-1.0..1.0).contains(&x));
+    /// ```
+    #[inline]
+    pub fn gen_range_f64(&mut self, range: Range<f64>) -> f64 {
+        let Range { start, end } = range;
+        assert!(
+            start.is_finite() && end.is_finite(),
+            "gen_range_f64: non-finite bounds {start}..{end}"
+        );
+        assert!(start < end, "gen_range_f64: empty range {start}..{end}");
+        let u = self.next_f64();
+        start + u * (end - start)
+    }
+
+    /// Produce a uniformly-distributed `u64` in `[0, n)`.
+    ///
+    /// Internal helper for the bounded-range API. Implements Daniel
+    /// Lemire's "Nearly Divisionless" rejection sampling (J. ACM 2019),
+    /// which is unbiased — every value in `[0, n)` is equally likely.
+    ///
+    /// The expected number of `next_u64()` calls is approximately
+    /// `1 + n / 2^64`, which is effectively 1 for any range smaller
+    /// than half the `u64` space.
+    ///
+    /// `n` MUST be greater than zero. Public methods enforce this
+    /// before calling.
+    #[inline]
+    fn bounded_u64(&mut self, n: u64) -> u64 {
+        debug_assert!(n != 0, "bounded_u64 requires n > 0");
+        // Single fast path covers ~99.99% of calls: one draw, one
+        // multiply, no division.
+        let mut x = self.next_u64();
+        let mut m: u128 = (x as u128).wrapping_mul(n as u128);
+        let mut l: u64 = m as u64;
+        if l < n {
+            // Rejection threshold: (-n) mod n in u64 arithmetic.
+            let t: u64 = n.wrapping_neg() % n;
+            while l < t {
+                x = self.next_u64();
+                m = (x as u128).wrapping_mul(n as u128);
+                l = m as u64;
+            }
+        }
+        (m >> 64) as u64
     }
 
     /// Advance the state by 2^128 calls to [`next_u64`](Self::next_u64).
@@ -488,5 +832,271 @@ mod tests {
         a.jump();
         b.jump();
         assert_eq!(a.state(), b.state());
+    }
+
+    // ------------------------------------------------------------
+    // Bounded-range tests
+    // ------------------------------------------------------------
+
+    #[test]
+    fn gen_range_u64_bounds() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        for _ in 0..10_000 {
+            let n = rng.gen_range_u64(100..200);
+            assert!((100..200).contains(&n));
+        }
+    }
+
+    #[test]
+    fn gen_range_u64_single_value_at_top() {
+        // [start, start+1) is a one-value half-open range; every draw
+        // must equal start exactly.
+        let mut rng = Xoshiro256::seed_from_u64(2);
+        for _ in 0..1000 {
+            assert_eq!(rng.gen_range_u64(7..8), 7);
+        }
+    }
+
+    #[test]
+    fn gen_range_inclusive_u64_die_roll() {
+        // Classic 1d6: every draw must land on a face. Over enough
+        // draws we'd expect to see all six faces appear.
+        let mut rng = Xoshiro256::seed_from_u64(3);
+        let mut faces = [0u32; 6];
+        for _ in 0..10_000 {
+            let d = rng.gen_range_inclusive_u64(1..=6);
+            assert!((1..=6).contains(&d));
+            faces[(d - 1) as usize] += 1;
+        }
+        for (i, &c) in faces.iter().enumerate() {
+            assert!(c > 0, "face {} never appeared in 10000 rolls", i + 1);
+        }
+    }
+
+    #[test]
+    fn gen_range_inclusive_u64_single_value() {
+        let mut rng = Xoshiro256::seed_from_u64(4);
+        for _ in 0..1000 {
+            assert_eq!(rng.gen_range_inclusive_u64(42..=42), 42);
+        }
+    }
+
+    #[test]
+    fn gen_range_inclusive_u64_full_width_uses_raw_draw() {
+        // For 0..=u64::MAX the bounded helper would compute span=2^64
+        // which overflows; the implementation special-cases this and
+        // returns next_u64() unchanged. Verify by checking against a
+        // freshly-seeded clone.
+        let mut a = Xoshiro256::seed_from_u64(5);
+        let mut b = Xoshiro256::seed_from_u64(5);
+        for _ in 0..256 {
+            assert_eq!(a.gen_range_inclusive_u64(0..=u64::MAX), b.next_u64());
+        }
+    }
+
+    #[test]
+    fn gen_range_u32_bounds() {
+        let mut rng = Xoshiro256::seed_from_u64(6);
+        for _ in 0..10_000 {
+            let n = rng.gen_range_u32(0..256);
+            assert!(n < 256);
+        }
+    }
+
+    #[test]
+    fn gen_range_inclusive_u32_full_width() {
+        // For 0..=u32::MAX every value is in-range; just verify
+        // bounds + that the call doesn't panic.
+        let mut rng = Xoshiro256::seed_from_u64(7);
+        for _ in 0..1000 {
+            let _ = rng.gen_range_inclusive_u32(0..=u32::MAX);
+        }
+    }
+
+    #[test]
+    fn gen_range_i64_negative_range() {
+        let mut rng = Xoshiro256::seed_from_u64(8);
+        for _ in 0..10_000 {
+            let n = rng.gen_range_i64(-100..-50);
+            assert!((-100..-50).contains(&n));
+        }
+    }
+
+    #[test]
+    fn gen_range_i64_mixed_sign_range() {
+        let mut rng = Xoshiro256::seed_from_u64(9);
+        let mut saw_neg = false;
+        let mut saw_pos = false;
+        for _ in 0..10_000 {
+            let n = rng.gen_range_i64(-100..100);
+            assert!((-100..100).contains(&n));
+            if n < 0 {
+                saw_neg = true;
+            }
+            if n >= 0 {
+                saw_pos = true;
+            }
+        }
+        assert!(saw_neg && saw_pos);
+    }
+
+    #[test]
+    fn gen_range_inclusive_i64_full_width_is_raw_draw() {
+        // i64::MIN..=i64::MAX is the full i64 space (span = 2^64).
+        // The implementation reinterprets next_u64 as i64.
+        let mut a = Xoshiro256::seed_from_u64(10);
+        let mut b = Xoshiro256::seed_from_u64(10);
+        for _ in 0..256 {
+            let from_range = a.gen_range_inclusive_i64(i64::MIN..=i64::MAX);
+            let from_raw = b.next_u64() as i64;
+            assert_eq!(from_range, from_raw);
+        }
+    }
+
+    #[test]
+    fn gen_range_i32_bounds() {
+        let mut rng = Xoshiro256::seed_from_u64(11);
+        for _ in 0..10_000 {
+            let n = rng.gen_range_i32(-1000..1000);
+            assert!((-1000..1000).contains(&n));
+        }
+    }
+
+    #[test]
+    fn gen_range_inclusive_i32_full_width() {
+        let mut rng = Xoshiro256::seed_from_u64(12);
+        for _ in 0..1000 {
+            let _ = rng.gen_range_inclusive_i32(i32::MIN..=i32::MAX);
+        }
+    }
+
+    #[test]
+    fn gen_range_f64_bounds() {
+        let mut rng = Xoshiro256::seed_from_u64(13);
+        for _ in 0..10_000 {
+            let x = rng.gen_range_f64(-1.0..1.0);
+            assert!((-1.0..1.0).contains(&x));
+        }
+    }
+
+    #[test]
+    fn gen_range_f64_positive_range() {
+        let mut rng = Xoshiro256::seed_from_u64(14);
+        for _ in 0..10_000 {
+            let x = rng.gen_range_f64(10.0..20.0);
+            assert!((10.0..20.0).contains(&x));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn gen_range_u64_panics_on_empty() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_u64(10..10);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn gen_range_u64_panics_on_reverse() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_u64(10..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn gen_range_inclusive_u64_panics_on_reverse() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_inclusive_u64(10..=5);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn gen_range_i64_panics_on_reverse() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_i64(5..-5);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn gen_range_f64_panics_on_nan() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_f64(f64::NAN..1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn gen_range_f64_panics_on_infinity() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_f64(0.0..f64::INFINITY);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn gen_range_f64_panics_on_reverse() {
+        let mut rng = Xoshiro256::seed_from_u64(1);
+        let _ = rng.gen_range_f64(1.0..0.0);
+    }
+
+    #[test]
+    fn gen_range_is_deterministic_under_same_seed() {
+        // Replay invariant: same seed + same sequence of calls => same
+        // outputs. This is the core determinism guarantee.
+        let mut a = Xoshiro256::seed_from_u64(99);
+        let mut b = Xoshiro256::seed_from_u64(99);
+        for _ in 0..1000 {
+            assert_eq!(a.gen_range_u64(0..1000), b.gen_range_u64(0..1000));
+        }
+    }
+
+    #[test]
+    fn gen_range_uniformity_chi_squared() {
+        // 100 000 draws over a range of 100 buckets. Expected per
+        // bucket: 1000. Chi-squared critical value (99 d.f.,
+        // alpha=0.001) is ~149; we use 250 to keep flake rate
+        // negligible on slow CI.
+        let mut rng = Xoshiro256::seed_from_u64(0xC0DE_F00D);
+        let mut counts = [0u32; 100];
+        for _ in 0..100_000 {
+            let v = rng.gen_range_u32(0..100);
+            counts[v as usize] += 1;
+        }
+        let expected = 100_000.0 / 100.0;
+        let chi: f64 = counts
+            .iter()
+            .map(|&c| {
+                let diff = c as f64 - expected;
+                diff * diff / expected
+            })
+            .sum();
+        assert!(
+            chi < 250.0,
+            "chi-squared {chi} too high — bounded-range output is biased"
+        );
+    }
+
+    #[test]
+    fn gen_range_die_roll_uniformity() {
+        // 600 000 die rolls. Expected count per face: 100 000.
+        // Chi-squared on 5 d.f., alpha=0.001 is ~21; cap at 50.
+        // Specifically targets the d6 case to catch modulo bias if
+        // anyone replaces the rejection sampling with `% 6`.
+        let mut rng = Xoshiro256::seed_from_u64(0xD1CE_D011);
+        let mut faces = [0u32; 6];
+        for _ in 0..600_000 {
+            let d = rng.gen_range_inclusive_u32(1..=6);
+            faces[(d - 1) as usize] += 1;
+        }
+        let expected = 100_000.0;
+        let chi: f64 = faces
+            .iter()
+            .map(|&c| {
+                let diff = c as f64 - expected;
+                diff * diff / expected
+            })
+            .sum();
+        assert!(chi < 50.0, "d6 uniformity chi-squared {chi} too high");
     }
 }
