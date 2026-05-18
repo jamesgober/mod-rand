@@ -86,6 +86,7 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+pub mod charsets;
 pub mod tier1;
 
 #[cfg(feature = "tier2")]

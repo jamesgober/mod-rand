@@ -569,6 +569,801 @@ impl Xoshiro256 {
         start + self.next_f64() * span
     }
 
+    // ------------------------------------------------------------
+    // Bounded-range API — additional integer widths
+    //
+    // Smaller widths (u8/u16/i8/i16 and usize/isize on 32- and
+    // 64-bit targets) route through `bounded_u64`. The 128-bit widths
+    // use a dedicated `bounded_u128` helper that runs Lemire's
+    // algorithm against a 256-bit intermediate built from two u64
+    // draws.
+    // ------------------------------------------------------------
+
+    /// Generate a uniformly-distributed `u8` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// Uses Lemire's "Nearly Divisionless" rejection sampling so the
+    /// output is genuinely uniform — there is no modulo bias.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_u8(0..200);
+    /// assert!(n < 200);
+    /// ```
+    #[inline]
+    pub fn gen_range_u8(&mut self, range: Range<u8>) -> u8 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_u8: empty range {start}..{end}");
+        let span = (end - start) as u64;
+        (start as u64 + self.bounded_u64(span)) as u8
+    }
+
+    /// Generate a uniformly-distributed `u8` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `0..=u8::MAX` is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let b = rng.gen_range_inclusive_u8(0..=u8::MAX);
+    /// # let _ = b;
+    /// ```
+    #[inline]
+    pub fn gen_range_inclusive_u8(&mut self, range: RangeInclusive<u8>) -> u8 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_u8: empty range {start}..={end}"
+        );
+        let span = (end as u64) - (start as u64) + 1;
+        (start as u64 + self.bounded_u64(span)) as u8
+    }
+
+    /// Generate a uniformly-distributed `u16` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// Uses Lemire's "Nearly Divisionless" rejection sampling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_u16(0..1000);
+    /// assert!(n < 1000);
+    /// ```
+    #[inline]
+    pub fn gen_range_u16(&mut self, range: Range<u16>) -> u16 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_u16: empty range {start}..{end}");
+        let span = (end - start) as u64;
+        (start as u64 + self.bounded_u64(span)) as u16
+    }
+
+    /// Generate a uniformly-distributed `u16` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `0..=u16::MAX` is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_inclusive_u16(&mut self, range: RangeInclusive<u16>) -> u16 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_u16: empty range {start}..={end}"
+        );
+        let span = (end as u64) - (start as u64) + 1;
+        (start as u64 + self.bounded_u64(span)) as u16
+    }
+
+    /// Generate a uniformly-distributed `u128` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// Uses Lemire's "Nearly Divisionless" rejection sampling against a
+    /// 256-bit intermediate, generalised to 128 bits. Two `next_u64`
+    /// draws per call in the common case.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let n = rng.gen_range_u128(0..(u128::MAX / 2));
+    /// assert!(n < u128::MAX / 2);
+    /// ```
+    #[inline]
+    pub fn gen_range_u128(&mut self, range: Range<u128>) -> u128 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_u128: empty range {start}..{end}");
+        let span = end - start;
+        start + self.bounded_u128(span)
+    }
+
+    /// Generate a uniformly-distributed `u128` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `0..=u128::MAX` is supported and is equivalent to a raw 128-bit
+    /// draw (two `next_u64` calls concatenated).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_inclusive_u128(&mut self, range: RangeInclusive<u128>) -> u128 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_u128: empty range {start}..={end}"
+        );
+        if start == 0 && end == u128::MAX {
+            // span = 2^128, doesn't fit. Use a raw 128-bit draw.
+            return ((self.next_u64() as u128) << 64) | (self.next_u64() as u128);
+        }
+        let span = end - start + 1;
+        start + self.bounded_u128(span)
+    }
+
+    /// Generate a uniformly-distributed `usize` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// On every supported Rust target (16-, 32-, and 64-bit pointer
+    /// widths), `usize` fits in `u64` and the draw routes through
+    /// [`bounded_u64`](Self::bounded_u64).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_usize(&mut self, range: Range<usize>) -> usize {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_usize: empty range {start}..{end}");
+        let span = (end - start) as u64;
+        (start as u64 + self.bounded_u64(span)) as usize
+    }
+
+    /// Generate a uniformly-distributed `usize` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `0..=usize::MAX` is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_inclusive_usize(&mut self, range: RangeInclusive<usize>) -> usize {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_usize: empty range {start}..={end}"
+        );
+        if start == 0 && end == usize::MAX {
+            // On 64-bit targets the span would be 2^64; raw draw.
+            // On 32-bit and below the conversion to u64 doesn't lose.
+            #[cfg(target_pointer_width = "64")]
+            {
+                return self.next_u64() as usize;
+            }
+            #[cfg(not(target_pointer_width = "64"))]
+            {
+                let span = (end as u64) - (start as u64) + 1;
+                return (start as u64 + self.bounded_u64(span)) as usize;
+            }
+        }
+        let span = (end - start) as u64 + 1;
+        (start as u64 + self.bounded_u64(span)) as usize
+    }
+
+    /// Generate a uniformly-distributed `i8` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_i8(&mut self, range: Range<i8>) -> i8 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_i8: empty range {start}..{end}");
+        let span = (end as i64 - start as i64) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i64) + (offset as i64)) as i8
+    }
+
+    /// Generate a uniformly-distributed `i8` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `i8::MIN..=i8::MAX` is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_inclusive_i8(&mut self, range: RangeInclusive<i8>) -> i8 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_i8: empty range {start}..={end}"
+        );
+        let span = ((end as i64) - (start as i64) + 1) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i64) + (offset as i64)) as i8
+    }
+
+    /// Generate a uniformly-distributed `i16` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_i16(&mut self, range: Range<i16>) -> i16 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_i16: empty range {start}..{end}");
+        let span = (end as i64 - start as i64) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i64) + (offset as i64)) as i16
+    }
+
+    /// Generate a uniformly-distributed `i16` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `i16::MIN..=i16::MAX` is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_inclusive_i16(&mut self, range: RangeInclusive<i16>) -> i16 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_i16: empty range {start}..={end}"
+        );
+        let span = ((end as i64) - (start as i64) + 1) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i64) + (offset as i64)) as i16
+    }
+
+    /// Generate a uniformly-distributed `i128` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// Negative and mixed-sign ranges are supported. Internally the
+    /// span is computed in `i256` semantics (via two `u128` halves)
+    /// then reduced with Lemire's algorithm at 128-bit width.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_i128(&mut self, range: Range<i128>) -> i128 {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_i128: empty range {start}..{end}");
+        // (end - start) fits in u128 for any valid i128 half-open range.
+        // We compute it via wrapping arithmetic at u128 width: when
+        // viewed mod 2^128, the unsigned bit pattern of (end - start)
+        // matches the unsigned span. (end as u128).wrapping_sub(start as u128)
+        // is the canonical way to obtain the span without going through
+        // a wider type.
+        let span = (end as u128).wrapping_sub(start as u128);
+        let offset = self.bounded_u128(span);
+        (start as u128).wrapping_add(offset) as i128
+    }
+
+    /// Generate a uniformly-distributed `i128` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `i128::MIN..=i128::MAX` is supported and is equivalent to
+    /// reinterpreting a raw 128-bit draw as `i128`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_inclusive_i128(&mut self, range: RangeInclusive<i128>) -> i128 {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_i128: empty range {start}..={end}"
+        );
+        if start == i128::MIN && end == i128::MAX {
+            // span = 2^128, doesn't fit. Reinterpret a raw draw.
+            let hi = self.next_u64() as u128;
+            let lo = self.next_u64() as u128;
+            return ((hi << 64) | lo) as i128;
+        }
+        // span = (end - start + 1) at u128 width; wrapping_sub gives
+        // the unsigned distance, then +1 cannot overflow because we
+        // ruled out the full-width case above.
+        let span = (end as u128).wrapping_sub(start as u128) + 1;
+        let offset = self.bounded_u128(span);
+        (start as u128).wrapping_add(offset) as i128
+    }
+
+    /// Generate a uniformly-distributed `isize` in the half-open range
+    /// `[range.start, range.end)`.
+    ///
+    /// On every supported Rust target (16-, 32-, and 64-bit pointer
+    /// widths), the span fits in `u64` and the draw routes through
+    /// [`bounded_u64`](Self::bounded_u64).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_isize(&mut self, range: Range<isize>) -> isize {
+        let Range { start, end } = range;
+        assert!(start < end, "gen_range_isize: empty range {start}..{end}");
+        let span = (end as i128 - start as i128) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i128) + (offset as i128)) as isize
+    }
+
+    /// Generate a uniformly-distributed `isize` in the closed range
+    /// `[range.start(), range.end()]`. The full-width range
+    /// `isize::MIN..=isize::MAX` is supported.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is empty.
+    #[inline]
+    pub fn gen_range_inclusive_isize(&mut self, range: RangeInclusive<isize>) -> isize {
+        let (start, end) = range.into_inner();
+        assert!(
+            start <= end,
+            "gen_range_inclusive_isize: empty range {start}..={end}"
+        );
+        if start == isize::MIN && end == isize::MAX {
+            #[cfg(target_pointer_width = "64")]
+            {
+                return self.next_u64() as isize;
+            }
+            #[cfg(not(target_pointer_width = "64"))]
+            {
+                let span = ((end as i128) - (start as i128) + 1) as u64;
+                let offset = self.bounded_u64(span);
+                return ((start as i128) + (offset as i128)) as isize;
+            }
+        }
+        let span = ((end as i128) - (start as i128) + 1) as u64;
+        let offset = self.bounded_u64(span);
+        ((start as i128) + (offset as i128)) as isize
+    }
+
+    // ------------------------------------------------------------
+    // Distribution helpers
+    // ------------------------------------------------------------
+
+    /// Produce a value uniformly in `[0.0, 1.0)`.
+    ///
+    /// Stable alias for [`next_f64`](Self::next_f64); both methods
+    /// produce identical output. The `gen_*` name complements
+    /// [`gen_range_f64`](Self::gen_range_f64) for callers who reason in
+    /// `gen_*` terms; `next_f64` is also kept for symmetry with
+    /// `next_u64` / `next_u32`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let f = rng.gen_f64();
+    /// assert!((0.0..1.0).contains(&f));
+    /// ```
+    #[inline]
+    pub fn gen_f64(&mut self) -> f64 {
+        self.next_f64()
+    }
+
+    /// Produce a value uniformly in `[0.0, 1.0)` at single precision.
+    ///
+    /// Uses the upper 24 bits of a `next_u32` draw — the standard way
+    /// to obtain a uniform `f32` in the unit interval without modulo
+    /// bias.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let f = rng.gen_f32();
+    /// assert!((0.0..1.0).contains(&f));
+    /// ```
+    #[inline]
+    pub fn gen_f32(&mut self) -> f32 {
+        // 24 bits of mantissa precision. 1.0 / 2^24.
+        (self.next_u32() >> 8) as f32 * (1.0 / ((1u32 << 24) as f32))
+    }
+
+    /// Bernoulli trial — return `true` with probability `p`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `p` is non-finite (NaN, ±∞) or outside `[0.0, 1.0]`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// // Strictly less than 1.0 — biased trial.
+    /// let outcome = rng.gen_bool(0.5);
+    /// # let _ = outcome;
+    /// ```
+    #[inline]
+    pub fn gen_bool(&mut self, p: f64) -> bool {
+        assert!(
+            p.is_finite() && (0.0..=1.0).contains(&p),
+            "gen_bool: p={p} must be finite and in [0.0, 1.0]"
+        );
+        if p == 0.0 {
+            return false;
+        }
+        if p == 1.0 {
+            return true;
+        }
+        self.next_f64() < p
+    }
+
+    // ------------------------------------------------------------
+    // String generation (gated on std for String allocation)
+    // ------------------------------------------------------------
+
+    /// Generate a random string of exactly `len` characters drawn from
+    /// `charset` (uniformly).
+    ///
+    /// Selection is performed via [`bounded_u64`](Self::bounded_u64)
+    /// against `charset.len()`, so the per-character distribution is
+    /// genuinely uniform — no modulo bias.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `charset` is empty or contains any non-ASCII byte
+    /// (byte >= 128). The ASCII guard preserves UTF-8 validity of the
+    /// returned `String`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// use mod_rand::charsets;
+    ///
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let id = rng.gen_string(12, charsets::ALPHANUMERIC);
+    /// assert_eq!(id.len(), 12);
+    /// ```
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    pub fn gen_string(&mut self, len: usize, charset: &[u8]) -> String {
+        assert!(!charset.is_empty(), "gen_string: charset must be non-empty");
+        assert!(
+            charset.iter().all(|&b| b < 128),
+            "gen_string: charset must be ASCII (every byte < 128)"
+        );
+        let n = charset.len() as u64;
+        let mut out = String::with_capacity(len);
+        for _ in 0..len {
+            let idx = self.bounded_u64(n) as usize;
+            out.push(charset[idx] as char);
+        }
+        out
+    }
+
+    /// Generate a random ASCII alphanumeric string (`A-Z`, `a-z`,
+    /// `0-9`) of exactly `len` characters.
+    ///
+    /// Equivalent to `gen_string(len, charsets::ALPHANUMERIC)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let s = rng.gen_alphanumeric(16);
+    /// assert_eq!(s.len(), 16);
+    /// assert!(s.chars().all(|c| c.is_ascii_alphanumeric()));
+    /// ```
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[inline]
+    pub fn gen_alphanumeric(&mut self, len: usize) -> String {
+        self.gen_string(len, crate::charsets::ALPHANUMERIC)
+    }
+
+    /// Generate a random ASCII alphabetic string (`A-Z`, `a-z`) of
+    /// exactly `len` characters.
+    ///
+    /// Equivalent to `gen_string(len, charsets::ALPHA)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let s = rng.gen_alpha(8);
+    /// assert_eq!(s.len(), 8);
+    /// assert!(s.chars().all(|c| c.is_ascii_alphabetic()));
+    /// ```
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[inline]
+    pub fn gen_alpha(&mut self, len: usize) -> String {
+        self.gen_string(len, crate::charsets::ALPHA)
+    }
+
+    /// Generate a random ASCII numeric string (`0-9`) of exactly `len`
+    /// characters. Leading zeros may appear.
+    ///
+    /// Equivalent to `gen_string(len, charsets::NUMERIC)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let s = rng.gen_numeric(6);
+    /// assert_eq!(s.len(), 6);
+    /// assert!(s.chars().all(|c| c.is_ascii_digit()));
+    /// ```
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[inline]
+    pub fn gen_numeric(&mut self, len: usize) -> String {
+        self.gen_string(len, crate::charsets::NUMERIC)
+    }
+
+    /// Generate a random lowercase hex string (`0-9`, `a-f`) of exactly
+    /// `len` characters.
+    ///
+    /// Equivalent to `gen_string(len, charsets::HEX_LOWER)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let s = rng.gen_hex(32);
+    /// assert_eq!(s.len(), 32);
+    /// assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
+    /// ```
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[inline]
+    pub fn gen_hex(&mut self, len: usize) -> String {
+        self.gen_string(len, crate::charsets::HEX_LOWER)
+    }
+
+    // ------------------------------------------------------------
+    // Collection operations
+    // ------------------------------------------------------------
+
+    /// In-place uniform Fisher-Yates shuffle.
+    ///
+    /// Every permutation of `slice` is equally likely. O(n) time, no
+    /// allocation. Available in `no_std` — the implementation does not
+    /// touch the heap.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let mut v = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    /// rng.shuffle(&mut v);
+    /// // v is some permutation of the original.
+    /// assert_eq!(v.iter().sum::<i32>(), 55);
+    /// ```
+    pub fn shuffle<T>(&mut self, slice: &mut [T]) {
+        // Fisher-Yates: for i from n-1 down to 1, swap slice[i] with
+        // slice[gen_range_inclusive_usize(0..=i)]. Each iteration uses
+        // an unbiased Lemire draw, so the resulting permutation is
+        // uniform over the n! permutations.
+        let n = slice.len();
+        if n < 2 {
+            return;
+        }
+        for i in (1..n).rev() {
+            let j = self.gen_range_inclusive_usize(0..=i);
+            slice.swap(i, j);
+        }
+    }
+
+    /// Draw `k` references uniformly without replacement from `slice`.
+    ///
+    /// Returns a `Vec<&T>` of exactly `k` references; order preserves
+    /// the original slice order (selection-sampling). Each k-subset of
+    /// `slice` is equally likely to be returned. O(n) time, allocates
+    /// exactly `k` slots.
+    ///
+    /// Algorithm: Knuth Algorithm S (selection sampling, *TAOCP* Vol.
+    /// 2 §3.4.2). One linear pass; for each element decide whether to
+    /// include it based on the number of items still needed vs. items
+    /// remaining.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `k > slice.len()`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let pool = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    /// let picks: Vec<&i32> = rng.sample(&pool, 3);
+    /// assert_eq!(picks.len(), 3);
+    /// ```
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    pub fn sample<'a, T>(&mut self, slice: &'a [T], k: usize) -> Vec<&'a T> {
+        let n = slice.len();
+        assert!(
+            k <= n,
+            "sample: k={k} exceeds slice length n={n}"
+        );
+        let mut out: Vec<&'a T> = Vec::with_capacity(k);
+        if k == 0 {
+            return out;
+        }
+        let mut remaining_needed = k as u64;
+        let mut remaining_pool = n as u64;
+        for item in slice {
+            // Probability of selecting this item is remaining_needed
+            // / remaining_pool. Draw a uniform u64 in [0, remaining_pool)
+            // and select if it's < remaining_needed.
+            let draw = self.bounded_u64(remaining_pool);
+            if draw < remaining_needed {
+                out.push(item);
+                remaining_needed -= 1;
+                if remaining_needed == 0 {
+                    break;
+                }
+            }
+            remaining_pool -= 1;
+        }
+        out
+    }
+
+    /// Choose one index from `weights` proportional to its weight.
+    ///
+    /// Returns `Some(i)` where the probability of choosing index `i`
+    /// is `weights[i] / weights.iter().sum()`. Returns `None` if
+    /// `weights` is empty or every weight is zero.
+    ///
+    /// O(weights.len()) per call: one cumulative-sum pass plus one
+    /// uniform `gen_range_f64` draw. No allocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any weight is negative, NaN, or non-finite. (`+∞`,
+    /// `-∞`, and `NaN` all panic.)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let weights = [1.0, 2.0, 3.0, 4.0];
+    /// let i = rng.weighted_index(&weights).unwrap();
+    /// assert!(i < 4);
+    /// ```
+    pub fn weighted_index(&mut self, weights: &[f64]) -> Option<usize> {
+        if weights.is_empty() {
+            return None;
+        }
+        let mut total = 0.0_f64;
+        for (i, &w) in weights.iter().enumerate() {
+            assert!(
+                w.is_finite() && w >= 0.0,
+                "weighted_index: weights[{i}]={w} must be finite and non-negative"
+            );
+            total += w;
+        }
+        if total <= 0.0 {
+            return None;
+        }
+        // Draw a uniform value in [0, total) and find the first
+        // cumulative bucket that contains it.
+        let pick = self.next_f64() * total;
+        let mut cumulative = 0.0_f64;
+        for (i, &w) in weights.iter().enumerate() {
+            cumulative += w;
+            if pick < cumulative {
+                return Some(i);
+            }
+        }
+        // Floating-point accumulation rounding can occasionally leave
+        // `pick` >= the final cumulative; map that to the last
+        // nonzero-weight index.
+        weights.iter().rposition(|&w| w > 0.0)
+    }
+
+    /// Choose one item from `items` proportional to its weight.
+    ///
+    /// Wrapper around [`weighted_index`](Self::weighted_index) that
+    /// returns the referenced item. Returns `None` if `items` is empty,
+    /// `weights` is empty, or every weight is zero.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `items.len() != weights.len()` or if any weight is
+    /// negative / NaN / non-finite.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_rand::tier1::Xoshiro256;
+    /// let mut rng = Xoshiro256::seed_from_u64(1);
+    /// let items = ["common", "uncommon", "rare", "epic"];
+    /// let weights = [70.0, 20.0, 8.0, 2.0];
+    /// let pick = rng.weighted_choice(&items, &weights).unwrap();
+    /// # let _ = pick;
+    /// ```
+    pub fn weighted_choice<'a, T>(
+        &mut self,
+        items: &'a [T],
+        weights: &[f64],
+    ) -> Option<&'a T> {
+        assert_eq!(
+            items.len(),
+            weights.len(),
+            "weighted_choice: items.len()={} != weights.len()={}",
+            items.len(),
+            weights.len()
+        );
+        self.weighted_index(weights).map(|i| &items[i])
+    }
+
+    /// Produce a uniformly-distributed `u128` in `[0, n)`.
+    ///
+    /// Internal helper. Generalises Lemire's "Nearly Divisionless"
+    /// algorithm from 64-bit to 128-bit by computing the 256-bit
+    /// product `x * n` and using the high 128 bits as the candidate,
+    /// the low 128 bits for the rejection threshold check.
+    ///
+    /// Two `next_u64` draws per call in the common case. `n` MUST be
+    /// greater than zero.
+    #[inline]
+    fn bounded_u128(&mut self, n: u128) -> u128 {
+        debug_assert!(n != 0, "bounded_u128 requires n > 0");
+        let mut x = self.draw_u128();
+        let (mut hi, mut lo) = mul_128_full(x, n);
+        if lo < n {
+            // Threshold: (-n) mod n at u128 width.
+            let t: u128 = n.wrapping_neg() % n;
+            while lo < t {
+                x = self.draw_u128();
+                let (h, l) = mul_128_full(x, n);
+                hi = h;
+                lo = l;
+            }
+        }
+        let _ = x;
+        hi
+    }
+
+    /// Raw 128-bit draw: concatenate two `next_u64` outputs.
+    #[inline]
+    fn draw_u128(&mut self) -> u128 {
+        ((self.next_u64() as u128) << 64) | (self.next_u64() as u128)
+    }
+
     /// Produce a uniformly-distributed `u64` in `[0, n)`.
     ///
     /// Internal helper for the bounded-range API. Implements Daniel
@@ -665,6 +1460,38 @@ impl Xoshiro256 {
         self.state[2] = s2;
         self.state[3] = s3;
     }
+}
+
+/// Full 256-bit product of two `u128` values, returned as
+/// `(high, low)` where each is a `u128` half of the 256-bit result.
+///
+/// Used by `bounded_u128` to implement Lemire's algorithm at 128-bit
+/// width. Pure shifts and 64×64→128 multiplies; no intrinsics.
+#[inline]
+fn mul_128_full(a: u128, b: u128) -> (u128, u128) {
+    let a_lo: u64 = a as u64;
+    let a_hi: u64 = (a >> 64) as u64;
+    let b_lo: u64 = b as u64;
+    let b_hi: u64 = (b >> 64) as u64;
+
+    // Schoolbook 2x2 multiplication of u64 limbs into u128 partials.
+    let p00: u128 = (a_lo as u128) * (b_lo as u128); // bits [0..128)
+    let p01: u128 = (a_lo as u128) * (b_hi as u128); // bits [64..192)
+    let p10: u128 = (a_hi as u128) * (b_lo as u128); // bits [64..192)
+    let p11: u128 = (a_hi as u128) * (b_hi as u128); // bits [128..256)
+
+    let mask_lo: u128 = 0xFFFF_FFFF_FFFF_FFFF;
+
+    // Middle column at bit position 64. Sum cannot overflow u128
+    // because each summand is at most (2^64 - 1)^2 < 2^128 and we sum
+    // three values each <= 2^128 - 2^65 + 1; the running total stays
+    // below 3 * 2^128.
+    let mid: u128 = (p00 >> 64) + (p01 & mask_lo) + (p10 & mask_lo);
+
+    let low: u128 = (p00 & mask_lo) | (mid << 64);
+    let high: u128 = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
+
+    (high, low)
 }
 
 /// splitmix64 — fast, full-period mixing of a 64-bit counter into a
