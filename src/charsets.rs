@@ -44,8 +44,7 @@
 ///
 /// The most common default for random identifiers: roughly 5.95 bits
 /// of entropy per character, no special characters, case-sensitive.
-pub const ALPHANUMERIC: &[u8] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+pub const ALPHANUMERIC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 /// ASCII letters only — `A-Z`, `a-z`. 52 characters.
 pub const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -70,8 +69,7 @@ pub const HEX_UPPER: &[u8] = b"0123456789ABCDEF";
 ///
 /// Safe to embed directly in URL paths and query strings without
 /// percent-encoding.
-pub const URL_SAFE: &[u8] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+pub const URL_SAFE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// Base58 alphabet (Bitcoin / Flickr). Omits the visually-ambiguous
 /// `0`, `O`, `I`, `l`. 58 characters.
@@ -82,8 +80,7 @@ pub const BASE58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrst
 ///
 /// Note: `+` and `/` require percent-encoding in URL contexts; prefer
 /// [`URL_SAFE`] when generating identifiers that go into URLs.
-pub const BASE64: &[u8] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+pub const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 #[cfg(test)]
 mod tests {
@@ -147,10 +144,7 @@ mod tests {
             BASE64,
         ] {
             for (i, &b) in cs.iter().enumerate() {
-                assert!(
-                    !cs[i + 1..].contains(&b),
-                    "duplicate byte {b} in charset"
-                );
+                assert!(!cs[i + 1..].contains(&b), "duplicate byte {b} in charset");
             }
         }
     }

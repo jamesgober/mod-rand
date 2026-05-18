@@ -8,9 +8,10 @@
 
 ```text
 mod_rand
-├── tier1   — fast deterministic PRNG (xoshiro256**)        [always]
-├── tier2   — process-unique seeds                          [feature: tier2]
-└── tier3   — OS-backed cryptographic random                [feature: tier3]
+├── charsets — ASCII charset constants for string generation [always]
+├── tier1    — fast deterministic PRNG (xoshiro256**)        [always]
+├── tier2    — process-unique seeds                          [feature: tier2]
+└── tier3    — OS-backed cryptographic random                [feature: tier3]
 ```
 
 ## Picking a tier
@@ -413,14 +414,125 @@ Zero runtime crate dependencies. Platform syscalls are declared
 inline via `extern "C"` blocks; no `libc`, no `getrandom` crate, no
 `rand` crate.
 
+## Charsets — `mod_rand::charsets`
+
+Standard ASCII charset constants for string generation. Available in
+`no_std`.
+
+| Constant       | Bytes | Contents                                 |
+|----------------|-------|------------------------------------------|
+| `ALPHANUMERIC` | 62    | `A-Z`, `a-z`, `0-9`                      |
+| `ALPHA`        | 52    | `A-Z`, `a-z`                             |
+| `ALPHA_LOWER`  | 26    | `a-z`                                    |
+| `ALPHA_UPPER`  | 26    | `A-Z`                                    |
+| `NUMERIC`      | 10    | `0-9`                                    |
+| `HEX_LOWER`    | 16    | `0-9`, `a-f`                             |
+| `HEX_UPPER`    | 16    | `0-9`, `A-F`                             |
+| `URL_SAFE`     | 64    | RFC 4648 §5: `A-Z a-z 0-9 - _`           |
+| `BASE58`       | 58    | Bitcoin alphabet (no `0`, `O`, `I`, `l`) |
+| `BASE64`       | 64    | RFC 4648 §4: `A-Z a-z 0-9 + /`           |
+
+Custom charsets are accepted everywhere the standard ones are — pass
+any `&[u8]` of ASCII bytes. Non-ASCII or empty charsets are rejected
+(panic on Tier 1 / Tier 2; `io::Error` `InvalidInput` on Tier 3) to
+preserve UTF-8 validity of the returned `String`.
+
+## Integer-width coverage (1.0+)
+
+Every tier covers every primitive integer width with both half-open
+(`..`) and inclusive (`..=`) variants:
+
+`u8`, `u16`, `u32`, `u64`, `u128`, `usize`, and the signed
+counterparts. The 128-bit ranges generalise Lemire's algorithm to a
+256-bit intermediate via two raw draws; the full-width inclusive
+ranges (`0..=u128::MAX`, `i128::MIN..=i128::MAX`) are special-cased
+to avoid span overflow at the type boundary.
+
+## Distribution helpers (Tier 1, 1.0+)
+
+| Method                          | Returns                          |
+|---------------------------------|----------------------------------|
+| `gen_f64()`                     | Uniform `f64` in `[0.0, 1.0)`. Stable alias for `next_f64`. |
+| `gen_f32()`                     | Uniform `f32` in `[0.0, 1.0)`. Upper 24 mantissa bits of a `next_u32`. |
+| `gen_bool(p: f64)`              | `true` with probability `p`. Panics on non-finite `p` or `p` outside `[0.0, 1.0]`. |
+
+Named distributions (Normal, Poisson, etc.) are out of scope for
+`1.x`. See `rand_distr` if you need them.
+
+## String generation (1.0+)
+
+Selection uses Lemire rejection sampling against `charset.len()`, so
+the per-character distribution is uniform — no modulo bias from the
+reduction step.
+
+### Tier 1 (gated on `feature = "std"`)
+
+| Method                          | Notes                                  |
+|---------------------------------|----------------------------------------|
+| `gen_string(len, charset)`      | Custom charset (ASCII; panics otherwise). |
+| `gen_alphanumeric(len)`         | `ALPHANUMERIC`.                        |
+| `gen_alpha(len)`                | `ALPHA`.                               |
+| `gen_numeric(len)`              | `NUMERIC`. Leading zeros allowed.      |
+| `gen_hex(len)`                  | `HEX_LOWER`.                           |
+
+### Tier 2
+
+`random_string(len, charset)`, `random_alphanumeric(len)`,
+`random_alpha(len)`, `random_numeric(len)`, `random_hex_string(len)`.
+
+These complement, do not replace, the existing `unique_*` family —
+`unique_*` guarantees per-call distinctness; `random_*` guarantees
+a uniform distribution. Both ship.
+
+### Tier 3
+
+`random_string(len, charset)`, `random_alphanumeric(len)`,
+`random_alpha(len)`, `random_numeric(len)`, `random_hex_string(len)`,
+each returning `io::Result<String>`.
+
+`tier3::random_hex(bytes: usize)` (the existing byte-count form) is
+preserved unchanged. `random_hex_string(len)` is the new
+character-count form.
+
+## Collection operations (1.0+)
+
+### Tier 1 (`Xoshiro256` methods)
+
+| Method                                     | Notes                              |
+|--------------------------------------------|-------------------------------------|
+| `shuffle<T>(&mut [T])`                     | Fisher-Yates, in place, `no_std`.  |
+| `sample<'a, T>(&'a [T], k) -> Vec<&'a T>`  | Selection sampling (Knuth Algorithm S). References preserve slice order. Gated on `std`. |
+| `weighted_index(&[f64]) -> Option<usize>`  | Cumulative method. O(n). `None` for empty / all-zero weights. |
+| `weighted_choice(&[T], &[f64]) -> Option<&T>` | Wrapper around `weighted_index` returning the chosen item. |
+
+Invalid input panics with a clear message: `k > slice.len()` on
+sample, length mismatch on `weighted_choice`, negative / NaN /
+non-finite weight on `weighted_*`.
+
+### Tier 3
+
+`shuffle<T>(&mut [T]) -> io::Result<()>` — cryptographic
+Fisher-Yates. Each swap consumes one `random_u64`-equivalent of OS
+entropy.
+
+Tier 2 collection ops and Tier 3 sample / weighted-choice are
+intentionally out of `1.0` (their use cases are rare; if demand
+surfaces they fit in a `1.x` minor release).
+
 ## Stability
 
-Through `0.9.x`, the API may shift in minor ways. The `1.0` release
-will pin the public API and the per-tier guarantees described above.
+`1.0` pins the entire public surface for the `1.x` line. See
+[STABILITY.md](STABILITY.md) for the SemVer policy, the determinism
+contract on Tier 1, and the deprecation rules.
 
 ## See also
 
 - [REPS.md](../REPS.md) — formal project specification.
+- [STABILITY.md](STABILITY.md) — `1.x` SemVer / determinism contract.
+- [COMPARISON.md](COMPARISON.md) — side-by-side vs `rand`,
+  `fastrand`, `nanorand`.
+- [API-FREEZE-AUDIT.md](API-FREEZE-AUDIT.md) — full manifest of every
+  public symbol in `1.0`.
 - [CHANGELOG.md](../CHANGELOG.md) — release history.
 - [examples/](../examples/) — runnable per-tier examples, including
   `bounded_ranges.rs`.

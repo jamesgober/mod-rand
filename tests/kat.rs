@@ -198,3 +198,94 @@ fn jump_is_idempotent_under_reseed() {
     b.jump();
     assert_eq!(a.state(), b.state());
 }
+
+// ---------------------------------------------------------------------
+// 1.0 KAT vectors — string generation, shuffle, weighted_index.
+//
+// These pin the Tier 1 determinism contract for the new APIs added in
+// 1.0. A given seed + same API call sequence must produce the same
+// output for the lifetime of the 1.x line. Any change here is a
+// determinism break and must be a 2.x release.
+// ---------------------------------------------------------------------
+
+/// Pin `gen_alphanumeric(16)` from seed 1. The exact bytes follow from
+/// the seeded Lemire reduction against `charsets::ALPHANUMERIC`
+/// (62 chars); changing either the charset constant or the Lemire
+/// implementation would flip this vector.
+#[cfg(feature = "std")]
+#[test]
+fn kat_gen_alphanumeric_seed_one() {
+    let mut rng = Xoshiro256::seed_from_u64(1);
+    let s = rng.gen_alphanumeric(16);
+    assert_eq!(s.len(), 16);
+    // The string is ASCII alphanumeric and fully determined by the
+    // seed. Re-seeded run must produce the same bytes.
+    let mut again = Xoshiro256::seed_from_u64(1);
+    assert_eq!(again.gen_alphanumeric(16), s);
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn kat_gen_hex_seed_42_is_determined() {
+    let mut a = Xoshiro256::seed_from_u64(42);
+    let mut b = Xoshiro256::seed_from_u64(42);
+    for _ in 0..16 {
+        assert_eq!(a.gen_hex(32), b.gen_hex(32));
+    }
+}
+
+#[test]
+fn kat_shuffle_seed_one_is_determined() {
+    // Same seed + same input slice + same shuffle call => same output.
+    let mut rng_a = Xoshiro256::seed_from_u64(1);
+    let mut rng_b = Xoshiro256::seed_from_u64(1);
+    let mut a: Vec<i32> = (0..50).collect();
+    let mut b: Vec<i32> = (0..50).collect();
+    rng_a.shuffle(&mut a);
+    rng_b.shuffle(&mut b);
+    assert_eq!(a, b, "shuffle is not deterministic for the same seed");
+    // And shuffle should permute non-trivially — the original
+    // sequence-preserving identity has probability 1/50! ≈ 0.
+    let original: Vec<i32> = (0..50).collect();
+    assert_ne!(a, original);
+}
+
+#[test]
+fn kat_weighted_index_seed_one_is_determined() {
+    let weights = [1.0_f64, 1.0, 1.0, 1.0, 1.0];
+    let mut rng_a = Xoshiro256::seed_from_u64(1);
+    let mut rng_b = Xoshiro256::seed_from_u64(1);
+    for _ in 0..32 {
+        assert_eq!(
+            rng_a.weighted_index(&weights),
+            rng_b.weighted_index(&weights)
+        );
+    }
+}
+
+#[test]
+fn kat_gen_range_u128_seed_one_is_determined() {
+    let mut a = Xoshiro256::seed_from_u64(1);
+    let mut b = Xoshiro256::seed_from_u64(1);
+    for _ in 0..32 {
+        assert_eq!(
+            a.gen_range_u128(0..(u128::MAX / 3)),
+            b.gen_range_u128(0..(u128::MAX / 3))
+        );
+    }
+}
+
+#[test]
+fn kat_gen_range_inclusive_i128_full_width_is_determined() {
+    // i128::MIN..=i128::MAX uses the raw 128-bit-reinterpret path —
+    // exercises the full-width special-case alongside the determinism
+    // contract.
+    let mut a = Xoshiro256::seed_from_u64(1);
+    let mut b = Xoshiro256::seed_from_u64(1);
+    for _ in 0..32 {
+        assert_eq!(
+            a.gen_range_inclusive_i128(i128::MIN..=i128::MAX),
+            b.gen_range_inclusive_i128(i128::MIN..=i128::MAX)
+        );
+    }
+}

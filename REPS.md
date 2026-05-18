@@ -229,19 +229,50 @@ MSRV ratchet. We cannot replace one MSRV-locking dep with another.
 
 ## 7. Stability
 
-Through `0.9.x` the public API MAY shift in minor ways. The `1.0`
-release pins the API and the tier definitions.
+- Through `0.9.x` the public API MAY shift in minor ways.
+- `1.0.0` pins the API, the tier definitions, and the Tier 1
+  reproducibility contract for the entire `1.x` line. See
+  [`docs/STABILITY.md`](docs/STABILITY.md) for the binding SemVer
+  policy.
 
-## 8. Out of scope
+## 8. Scope at 1.0
 
-- Generic distribution types (Normal, Poisson, Exponential, etc.) —
-  that is `rand_distr` territory.
-- Trait-heavy abstraction (`Rng` / `RngCore` / `SeedableRng`) — we
-  expose concrete types.
+Operations covered (locked under the `1.x` SemVer contract):
+
+- All three tiers (Tier 1 PRNG, Tier 2 process-unique, Tier 3 OS
+  cryptographic), each with raw draws, byte fills, and bounded
+  integer ranges on every primitive integer width (`u8` / `u16` /
+  `u32` / `u64` / `u128` / `usize` and signed counterparts), both
+  half-open (`..`) and inclusive (`..=`).
+- Tier 1 distribution helpers: `gen_f64`, `gen_f32`, `gen_bool`.
+- String generation on every tier: `random_string` / `gen_string`
+  taking a `&[u8]` charset, plus convenience methods for the most
+  common cases (`*_alphanumeric`, `*_alpha`, `*_numeric`, `*_hex`).
+  Charset constants live in `mod_rand::charsets`.
+- Collection operations on Tier 1: `shuffle`, `sample`,
+  `weighted_index`, `weighted_choice`. Cryptographic shuffle on
+  Tier 3.
+
+## 9. Out of scope (1.x)
+
+Adding any of these in a later minor release is fine as a pure
+addition; the list below is what 1.0 explicitly does NOT ship:
+
+- Named distributions (Normal, Poisson, Exponential, Beta, Gamma,
+  etc.). Defer to `rand_distr` if you need them. The raw uniform +
+  Bernoulli helpers in this crate are the building blocks; named
+  distributions are 1.1+ work if demand surfaces.
+- Trait-heavy abstraction (`Rng` / `RngCore` / `SeedableRng`) — this
+  crate exposes concrete types only.
 - Hardware random sources (RDRAND, RDSEED) — may revisit if there is
   demand.
 - Multi-thread coordination (shared atomic-state RNGs) — Tier 2's
   atomic counter is enough; if users want a shared Tier 1, they wrap
   one themselves.
-- Sampling from arbitrary collections (`choose`, `shuffle`) — easy
-  to build on top of `gen_range_*` and out of scope for this crate.
+- Async APIs. mod-rand stays sync.
+- Serde integration for `Xoshiro256` state. Candidate for 1.x minor.
+- Tier 2 / Tier 3 collection ops beyond Tier 3 shuffle. Tier 1
+  covers the use cases; if demand surfaces for cryptographic sample
+  / weighted choice, those land as 1.x minor additions.
+- An alias-method weighted-choice variant. Candidate for 1.x minor
+  if demand surfaces for high-throughput pre-built weight tables.

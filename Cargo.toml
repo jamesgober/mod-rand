@@ -1,6 +1,6 @@
 [package]
 name = "mod-rand"
-version = "0.9.5"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.75"
 readme = "README.md"
@@ -10,14 +10,14 @@ authors = [
     "James Gober <me@jamesgober.com>"
 ]
 
-description = "Tiered random number generation for Rust. Fast PRNG, process-unique seeds, and OS-backed cryptographic random in one zero-dependency library. Pick the tier appropriate to your threat model."
+description = "Tiered randomness for Rust: fast PRNG, process-unique seeds, and OS-backed cryptographic random — plus bounded ranges, strings, tokens, shuffle, sample, and weighted choice. Zero dependencies, MSRV 1.75."
 
 keywords = [
     "random",
     "rng",
     "prng",
-    "cryptography",
-    "xoshiro"
+    "crypto",
+    "uuid"
 ]
 
 categories = [

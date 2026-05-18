@@ -729,8 +729,8 @@ impl Xoshiro256 {
     /// `[range.start, range.end)`.
     ///
     /// On every supported Rust target (16-, 32-, and 64-bit pointer
-    /// widths), `usize` fits in `u64` and the draw routes through
-    /// [`bounded_u64`](Self::bounded_u64).
+    /// widths), `usize` fits in `u64` and the draw routes through the
+    /// 64-bit Lemire path.
     ///
     /// # Panics
     ///
@@ -900,8 +900,8 @@ impl Xoshiro256 {
     /// `[range.start, range.end)`.
     ///
     /// On every supported Rust target (16-, 32-, and 64-bit pointer
-    /// widths), the span fits in `u64` and the draw routes through
-    /// [`bounded_u64`](Self::bounded_u64).
+    /// widths), the span fits in `u64` and the draw routes through the
+    /// 64-bit Lemire path.
     ///
     /// # Panics
     ///
@@ -1028,9 +1028,9 @@ impl Xoshiro256 {
     /// Generate a random string of exactly `len` characters drawn from
     /// `charset` (uniformly).
     ///
-    /// Selection is performed via [`bounded_u64`](Self::bounded_u64)
-    /// against `charset.len()`, so the per-character distribution is
-    /// genuinely uniform — no modulo bias.
+    /// Selection uses Lemire rejection sampling against `charset.len()`,
+    /// so the per-character distribution is genuinely uniform — no
+    /// modulo bias.
     ///
     /// # Panics
     ///
@@ -1213,10 +1213,7 @@ impl Xoshiro256 {
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn sample<'a, T>(&mut self, slice: &'a [T], k: usize) -> Vec<&'a T> {
         let n = slice.len();
-        assert!(
-            k <= n,
-            "sample: k={k} exceeds slice length n={n}"
-        );
+        assert!(k <= n, "sample: k={k} exceeds slice length n={n}");
         let mut out: Vec<&'a T> = Vec::with_capacity(k);
         if k == 0 {
             return out;
@@ -1315,11 +1312,7 @@ impl Xoshiro256 {
     /// let pick = rng.weighted_choice(&items, &weights).unwrap();
     /// # let _ = pick;
     /// ```
-    pub fn weighted_choice<'a, T>(
-        &mut self,
-        items: &'a [T],
-        weights: &[f64],
-    ) -> Option<&'a T> {
+    pub fn weighted_choice<'a, T>(&mut self, items: &'a [T], weights: &[f64]) -> Option<&'a T> {
         assert_eq!(
             items.len(),
             weights.len(),

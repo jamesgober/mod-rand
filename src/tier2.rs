@@ -426,6 +426,469 @@ pub fn range_inclusive_i32(range: RangeInclusive<i32>) -> i32 {
     ((start as i64) + (offset as i64)) as i32
 }
 
+// ------------------------------------------------------------
+// Bounded-range API — additional integer widths
+// ------------------------------------------------------------
+
+/// Produce a uniformly-distributed `u128` in `[0, n)`.
+///
+/// Internal helper for the 128-bit bounded-range functions. Generalises
+/// Lemire's "Nearly Divisionless" rejection sampling to 128-bit width
+/// via a 256-bit intermediate product. Two `unique_u64` draws per call
+/// in the common case. `n` MUST be greater than zero.
+#[inline]
+fn bounded_u128(n: u128) -> u128 {
+    debug_assert!(n != 0, "bounded_u128 requires n > 0");
+    let mut x = draw_u128();
+    let (mut hi, mut lo) = mul_128_full(x, n);
+    if lo < n {
+        let t: u128 = n.wrapping_neg() % n;
+        while lo < t {
+            x = draw_u128();
+            let (h, l) = mul_128_full(x, n);
+            hi = h;
+            lo = l;
+        }
+    }
+    let _ = x;
+    hi
+}
+
+#[inline]
+fn draw_u128() -> u128 {
+    ((unique_u64() as u128) << 64) | (unique_u64() as u128)
+}
+
+#[inline]
+fn mul_128_full(a: u128, b: u128) -> (u128, u128) {
+    let a_lo: u64 = a as u64;
+    let a_hi: u64 = (a >> 64) as u64;
+    let b_lo: u64 = b as u64;
+    let b_hi: u64 = (b >> 64) as u64;
+    let p00: u128 = (a_lo as u128) * (b_lo as u128);
+    let p01: u128 = (a_lo as u128) * (b_hi as u128);
+    let p10: u128 = (a_hi as u128) * (b_lo as u128);
+    let p11: u128 = (a_hi as u128) * (b_hi as u128);
+    let mask_lo: u128 = 0xFFFF_FFFF_FFFF_FFFF;
+    let mid: u128 = (p00 >> 64) + (p01 & mask_lo) + (p10 & mask_lo);
+    let low: u128 = (p00 & mask_lo) | (mid << 64);
+    let high: u128 = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
+    (high, low)
+}
+
+/// Generate a uniformly-distributed `u8` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+/// let n = tier2::range_u8(0..100);
+/// assert!(n < 100);
+/// ```
+pub fn range_u8(range: Range<u8>) -> u8 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_u8: empty range {start}..{end}");
+    let span = (end - start) as u64;
+    (start as u64 + bounded_u64(span)) as u8
+}
+
+/// Generate a uniformly-distributed `u8` in the closed range
+/// `[range.start(), range.end()]`. The full-width `0..=u8::MAX` is
+/// supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_u8(range: RangeInclusive<u8>) -> u8 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_u8: empty range {start}..={end}"
+    );
+    let span = (end as u64) - (start as u64) + 1;
+    (start as u64 + bounded_u64(span)) as u8
+}
+
+/// Generate a uniformly-distributed `u16` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+/// let n = tier2::range_u16(0..1000);
+/// assert!(n < 1000);
+/// ```
+pub fn range_u16(range: Range<u16>) -> u16 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_u16: empty range {start}..{end}");
+    let span = (end - start) as u64;
+    (start as u64 + bounded_u64(span)) as u16
+}
+
+/// Generate a uniformly-distributed `u16` in the closed range
+/// `[range.start(), range.end()]`. The full-width `0..=u16::MAX` is
+/// supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_u16(range: RangeInclusive<u16>) -> u16 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_u16: empty range {start}..={end}"
+    );
+    let span = (end as u64) - (start as u64) + 1;
+    (start as u64 + bounded_u64(span)) as u16
+}
+
+/// Generate a uniformly-distributed `u128` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+/// let n = tier2::range_u128(0..(u128::MAX / 2));
+/// assert!(n < u128::MAX / 2);
+/// ```
+pub fn range_u128(range: Range<u128>) -> u128 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_u128: empty range {start}..{end}");
+    let span = end - start;
+    start + bounded_u128(span)
+}
+
+/// Generate a uniformly-distributed `u128` in the closed range
+/// `[range.start(), range.end()]`. The full-width `0..=u128::MAX` is
+/// supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_u128(range: RangeInclusive<u128>) -> u128 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_u128: empty range {start}..={end}"
+    );
+    if start == 0 && end == u128::MAX {
+        return draw_u128();
+    }
+    let span = end - start + 1;
+    start + bounded_u128(span)
+}
+
+/// Generate a uniformly-distributed `usize` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_usize(range: Range<usize>) -> usize {
+    let Range { start, end } = range;
+    assert!(start < end, "range_usize: empty range {start}..{end}");
+    let span = (end - start) as u64;
+    (start as u64 + bounded_u64(span)) as usize
+}
+
+/// Generate a uniformly-distributed `usize` in the closed range
+/// `[range.start(), range.end()]`. The full-width `0..=usize::MAX` is
+/// supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_usize(range: RangeInclusive<usize>) -> usize {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_usize: empty range {start}..={end}"
+    );
+    if start == 0 && end == usize::MAX {
+        #[cfg(target_pointer_width = "64")]
+        {
+            return unique_u64() as usize;
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        {
+            let span = (end as u64) - (start as u64) + 1;
+            return (start as u64 + bounded_u64(span)) as usize;
+        }
+    }
+    let span = (end - start) as u64 + 1;
+    (start as u64 + bounded_u64(span)) as usize
+}
+
+/// Generate a uniformly-distributed `i8` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_i8(range: Range<i8>) -> i8 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_i8: empty range {start}..{end}");
+    let span = (end as i64 - start as i64) as u64;
+    let offset = bounded_u64(span);
+    ((start as i64) + (offset as i64)) as i8
+}
+
+/// Generate a uniformly-distributed `i8` in the closed range
+/// `[range.start(), range.end()]`. The full-width `i8::MIN..=i8::MAX`
+/// is supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_i8(range: RangeInclusive<i8>) -> i8 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_i8: empty range {start}..={end}"
+    );
+    let span = ((end as i64) - (start as i64) + 1) as u64;
+    let offset = bounded_u64(span);
+    ((start as i64) + (offset as i64)) as i8
+}
+
+/// Generate a uniformly-distributed `i16` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_i16(range: Range<i16>) -> i16 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_i16: empty range {start}..{end}");
+    let span = (end as i64 - start as i64) as u64;
+    let offset = bounded_u64(span);
+    ((start as i64) + (offset as i64)) as i16
+}
+
+/// Generate a uniformly-distributed `i16` in the closed range
+/// `[range.start(), range.end()]`. The full-width `i16::MIN..=i16::MAX`
+/// is supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_i16(range: RangeInclusive<i16>) -> i16 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_i16: empty range {start}..={end}"
+    );
+    let span = ((end as i64) - (start as i64) + 1) as u64;
+    let offset = bounded_u64(span);
+    ((start as i64) + (offset as i64)) as i16
+}
+
+/// Generate a uniformly-distributed `i128` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_i128(range: Range<i128>) -> i128 {
+    let Range { start, end } = range;
+    assert!(start < end, "range_i128: empty range {start}..{end}");
+    let span = (end as u128).wrapping_sub(start as u128);
+    let offset = bounded_u128(span);
+    (start as u128).wrapping_add(offset) as i128
+}
+
+/// Generate a uniformly-distributed `i128` in the closed range
+/// `[range.start(), range.end()]`. The full-width
+/// `i128::MIN..=i128::MAX` is supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_i128(range: RangeInclusive<i128>) -> i128 {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_i128: empty range {start}..={end}"
+    );
+    if start == i128::MIN && end == i128::MAX {
+        return draw_u128() as i128;
+    }
+    let span = (end as u128).wrapping_sub(start as u128) + 1;
+    let offset = bounded_u128(span);
+    (start as u128).wrapping_add(offset) as i128
+}
+
+/// Generate a uniformly-distributed `isize` in the half-open range
+/// `[range.start, range.end)`.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_isize(range: Range<isize>) -> isize {
+    let Range { start, end } = range;
+    assert!(start < end, "range_isize: empty range {start}..{end}");
+    let span = (end as i128 - start as i128) as u64;
+    let offset = bounded_u64(span);
+    ((start as i128) + (offset as i128)) as isize
+}
+
+/// Generate a uniformly-distributed `isize` in the closed range
+/// `[range.start(), range.end()]`. The full-width
+/// `isize::MIN..=isize::MAX` is supported.
+///
+/// # Panics
+///
+/// Panics if the range is empty.
+pub fn range_inclusive_isize(range: RangeInclusive<isize>) -> isize {
+    let (start, end) = range.into_inner();
+    assert!(
+        start <= end,
+        "range_inclusive_isize: empty range {start}..={end}"
+    );
+    if start == isize::MIN && end == isize::MAX {
+        #[cfg(target_pointer_width = "64")]
+        {
+            return unique_u64() as isize;
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        {
+            let span = ((end as i128) - (start as i128) + 1) as u64;
+            let offset = bounded_u64(span);
+            return ((start as i128) + (offset as i128)) as isize;
+        }
+    }
+    let span = ((end as i128) - (start as i128) + 1) as u64;
+    let offset = bounded_u64(span);
+    ((start as i128) + (offset as i128)) as isize
+}
+
+// ------------------------------------------------------------
+// String generation
+//
+// Distinct from `unique_*` — these are sampled-uniformly strings
+// without the per-call distinctness guarantee. Use `unique_*` when you
+// need every call to return a different value (tempdir names,
+// correlation IDs); use `random_*` for password-style content where
+// uniformity matters more than collision-freedom.
+// ------------------------------------------------------------
+
+/// Generate a random string of exactly `len` characters drawn from
+/// `charset` (uniformly).
+///
+/// Selection is unbiased — `bounded_u64(charset.len() as u64)` is
+/// used internally, so the per-character distribution is uniform.
+///
+/// # Panics
+///
+/// Panics if `charset` is empty or contains a non-ASCII byte
+/// (`byte >= 128`). The ASCII guard preserves UTF-8 validity of the
+/// returned `String`.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::{tier2, charsets};
+/// let s = tier2::random_string(16, charsets::ALPHANUMERIC);
+/// assert_eq!(s.len(), 16);
+/// ```
+pub fn random_string(len: usize, charset: &[u8]) -> String {
+    assert!(
+        !charset.is_empty(),
+        "random_string: charset must be non-empty"
+    );
+    assert!(
+        charset.iter().all(|&b| b < 128),
+        "random_string: charset must be ASCII (every byte < 128)"
+    );
+    let n = charset.len() as u64;
+    let mut out = String::with_capacity(len);
+    for _ in 0..len {
+        let idx = bounded_u64(n) as usize;
+        out.push(charset[idx] as char);
+    }
+    out
+}
+
+/// Generate a random ASCII alphanumeric string (`A-Z`, `a-z`, `0-9`)
+/// of exactly `len` characters.
+///
+/// Equivalent to `random_string(len, charsets::ALPHANUMERIC)`.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+/// let s = tier2::random_alphanumeric(12);
+/// assert_eq!(s.len(), 12);
+/// ```
+#[inline]
+pub fn random_alphanumeric(len: usize) -> String {
+    random_string(len, crate::charsets::ALPHANUMERIC)
+}
+
+/// Generate a random ASCII alphabetic string (`A-Z`, `a-z`) of exactly
+/// `len` characters.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+/// let s = tier2::random_alpha(8);
+/// assert_eq!(s.len(), 8);
+/// ```
+#[inline]
+pub fn random_alpha(len: usize) -> String {
+    random_string(len, crate::charsets::ALPHA)
+}
+
+/// Generate a random ASCII numeric string (`0-9`) of exactly `len`
+/// characters. Leading zeros may appear.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+/// let s = tier2::random_numeric(6);
+/// assert_eq!(s.len(), 6);
+/// ```
+#[inline]
+pub fn random_numeric(len: usize) -> String {
+    random_string(len, crate::charsets::NUMERIC)
+}
+
+/// Generate a random lowercase hex string (`0-9`, `a-f`) of exactly
+/// `len` characters.
+///
+/// Distinct from [`unique_hex`]: this function makes no uniqueness
+/// guarantee but draws each character uniformly from the hex alphabet.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier2;
+/// let s = tier2::random_hex_string(32);
+/// assert_eq!(s.len(), 32);
+/// ```
+#[inline]
+pub fn random_hex_string(len: usize) -> String {
+    random_string(len, crate::charsets::HEX_LOWER)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

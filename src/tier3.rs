@@ -665,6 +665,528 @@ pub fn random_range_inclusive_i32(range: RangeInclusive<i32>) -> io::Result<i32>
     Ok(((start as i64) + (offset as i64)) as i32)
 }
 
+// ------------------------------------------------------------
+// Bounded-range API — additional integer widths
+// ------------------------------------------------------------
+
+/// Produce a uniformly-distributed `u128` in `[0, n)`.
+///
+/// Internal helper. Lemire's "Nearly Divisionless" rejection sampling
+/// generalised to 128-bit width via a 256-bit intermediate. Two
+/// `random_u64` calls (two syscalls) per draw in the common case.
+#[inline]
+fn bounded_u128(n: u128) -> io::Result<u128> {
+    debug_assert!(n != 0, "bounded_u128 requires n > 0");
+    let mut x = draw_u128()?;
+    let (mut hi, mut lo) = mul_128_full(x, n);
+    if lo < n {
+        let t: u128 = n.wrapping_neg() % n;
+        while lo < t {
+            x = draw_u128()?;
+            let (h, l) = mul_128_full(x, n);
+            hi = h;
+            lo = l;
+        }
+    }
+    let _ = x;
+    Ok(hi)
+}
+
+#[inline]
+fn draw_u128() -> io::Result<u128> {
+    let mut buf = [0u8; 16];
+    fill_bytes(&mut buf)?;
+    Ok(u128::from_le_bytes(buf))
+}
+
+#[inline]
+fn mul_128_full(a: u128, b: u128) -> (u128, u128) {
+    let a_lo: u64 = a as u64;
+    let a_hi: u64 = (a >> 64) as u64;
+    let b_lo: u64 = b as u64;
+    let b_hi: u64 = (b >> 64) as u64;
+    let p00: u128 = (a_lo as u128) * (b_lo as u128);
+    let p01: u128 = (a_lo as u128) * (b_hi as u128);
+    let p10: u128 = (a_hi as u128) * (b_lo as u128);
+    let p11: u128 = (a_hi as u128) * (b_hi as u128);
+    let mask_lo: u128 = 0xFFFF_FFFF_FFFF_FFFF;
+    let mid: u128 = (p00 >> 64) + (p01 & mask_lo) + (p10 & mask_lo);
+    let low: u128 = (p00 & mask_lo) | (mid << 64);
+    let high: u128 = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
+    (high, low)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u8` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// - Returns `InvalidInput` if the range is empty.
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+/// let n = tier3::random_range_u8(0..100)?;
+/// assert!(n < 100);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn random_range_u8(range: Range<u8>) -> io::Result<u8> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_u8: empty range"));
+    }
+    let span = (end - start) as u64;
+    Ok((start as u64 + bounded_u64(span)?) as u8)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u8` in
+/// the closed range `[range.start(), range.end()]`. The full-width
+/// `0..=u8::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_u8(range: RangeInclusive<u8>) -> io::Result<u8> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_u8: empty range"));
+    }
+    let span = (end as u64) - (start as u64) + 1;
+    Ok((start as u64 + bounded_u64(span)?) as u8)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u16` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_u16(range: Range<u16>) -> io::Result<u16> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_u16: empty range"));
+    }
+    let span = (end - start) as u64;
+    Ok((start as u64 + bounded_u64(span)?) as u16)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u16` in
+/// the closed range `[range.start(), range.end()]`. The full-width
+/// `0..=u16::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_u16(range: RangeInclusive<u16>) -> io::Result<u16> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_u16: empty range"));
+    }
+    let span = (end as u64) - (start as u64) + 1;
+    Ok((start as u64 + bounded_u64(span)?) as u16)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u128` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// Uses two `random_u64` calls per draw in the common case. Lemire
+/// rejection sampling at 128-bit width via a 256-bit intermediate.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_u128(range: Range<u128>) -> io::Result<u128> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_u128: empty range"));
+    }
+    let span = end - start;
+    Ok(start + bounded_u128(span)?)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `u128` in
+/// the closed range `[range.start(), range.end()]`. The full-width
+/// `0..=u128::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_u128(range: RangeInclusive<u128>) -> io::Result<u128> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error(
+            "random_range_inclusive_u128: empty range",
+        ));
+    }
+    if start == 0 && end == u128::MAX {
+        return draw_u128();
+    }
+    let span = end - start + 1;
+    Ok(start + bounded_u128(span)?)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `usize`
+/// in the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_usize(range: Range<usize>) -> io::Result<usize> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_usize: empty range"));
+    }
+    let span = (end - start) as u64;
+    Ok((start as u64 + bounded_u64(span)?) as usize)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `usize`
+/// in the closed range `[range.start(), range.end()]`. The full-width
+/// `0..=usize::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_usize(range: RangeInclusive<usize>) -> io::Result<usize> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error(
+            "random_range_inclusive_usize: empty range",
+        ));
+    }
+    if start == 0 && end == usize::MAX {
+        #[cfg(target_pointer_width = "64")]
+        {
+            return random_u64().map(|u| u as usize);
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        {
+            let span = (end as u64) - (start as u64) + 1;
+            return bounded_u64(span).map(|o| (start as u64 + o) as usize);
+        }
+    }
+    let span = (end - start) as u64 + 1;
+    Ok((start as u64 + bounded_u64(span)?) as usize)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i8` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_i8(range: Range<i8>) -> io::Result<i8> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_i8: empty range"));
+    }
+    let span = (end as i64 - start as i64) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i64) + (offset as i64)) as i8)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i8` in
+/// the closed range `[range.start(), range.end()]`. The full-width
+/// `i8::MIN..=i8::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_i8(range: RangeInclusive<i8>) -> io::Result<i8> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_i8: empty range"));
+    }
+    let span = ((end as i64) - (start as i64) + 1) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i64) + (offset as i64)) as i8)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i16` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_i16(range: Range<i16>) -> io::Result<i16> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_i16: empty range"));
+    }
+    let span = (end as i64 - start as i64) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i64) + (offset as i64)) as i16)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i16` in
+/// the closed range `[range.start(), range.end()]`. The full-width
+/// `i16::MIN..=i16::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_i16(range: RangeInclusive<i16>) -> io::Result<i16> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error("random_range_inclusive_i16: empty range"));
+    }
+    let span = ((end as i64) - (start as i64) + 1) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i64) + (offset as i64)) as i16)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i128` in
+/// the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_i128(range: Range<i128>) -> io::Result<i128> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_i128: empty range"));
+    }
+    let span = (end as u128).wrapping_sub(start as u128);
+    let offset = bounded_u128(span)?;
+    Ok((start as u128).wrapping_add(offset) as i128)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `i128` in
+/// the closed range `[range.start(), range.end()]`. The full-width
+/// `i128::MIN..=i128::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_i128(range: RangeInclusive<i128>) -> io::Result<i128> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error(
+            "random_range_inclusive_i128: empty range",
+        ));
+    }
+    if start == i128::MIN && end == i128::MAX {
+        return draw_u128().map(|u| u as i128);
+    }
+    let span = (end as u128).wrapping_sub(start as u128) + 1;
+    let offset = bounded_u128(span)?;
+    Ok((start as u128).wrapping_add(offset) as i128)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `isize`
+/// in the half-open range `[range.start, range.end)`.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_isize(range: Range<isize>) -> io::Result<isize> {
+    let Range { start, end } = range;
+    if start >= end {
+        return Err(empty_range_error("random_range_isize: empty range"));
+    }
+    let span = (end as i128 - start as i128) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i128) + (offset as i128)) as isize)
+}
+
+/// Generate a cryptographically-secure uniformly-distributed `isize`
+/// in the closed range `[range.start(), range.end()]`. The full-width
+/// `isize::MIN..=isize::MAX` is supported.
+///
+/// # Errors
+///
+/// As for [`random_range_u8`].
+pub fn random_range_inclusive_isize(range: RangeInclusive<isize>) -> io::Result<isize> {
+    let (start, end) = range.into_inner();
+    if start > end {
+        return Err(empty_range_error(
+            "random_range_inclusive_isize: empty range",
+        ));
+    }
+    if start == isize::MIN && end == isize::MAX {
+        #[cfg(target_pointer_width = "64")]
+        {
+            return random_u64().map(|u| u as isize);
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        {
+            let span = ((end as i128) - (start as i128) + 1) as u64;
+            let offset = bounded_u64(span)?;
+            return Ok(((start as i128) + (offset as i128)) as isize);
+        }
+    }
+    let span = ((end as i128) - (start as i128) + 1) as u64;
+    let offset = bounded_u64(span)?;
+    Ok(((start as i128) + (offset as i128)) as isize)
+}
+
+// ------------------------------------------------------------
+// String generation
+// ------------------------------------------------------------
+
+/// Helper: build an `InvalidInput` error for charset-validation
+/// failures.
+#[inline]
+fn invalid_charset_error(msg: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, msg)
+}
+
+/// Generate a cryptographically-secure random string of exactly `len`
+/// characters drawn from `charset` (uniformly).
+///
+/// Selection uses Lemire rejection sampling against `charset.len()`,
+/// so the per-character distribution is uniform — no modulo bias.
+///
+/// Each character costs one rejection-sampled draw (typically one
+/// `random_u64` syscall in the common case).
+///
+/// # Errors
+///
+/// - Returns `InvalidInput` if `charset` is empty or contains a
+///   non-ASCII byte (byte >= 128).
+/// - Returns `io::Error` if the OS CSPRNG is unavailable.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::{tier3, charsets};
+/// let s = tier3::random_string(16, charsets::ALPHANUMERIC)?;
+/// assert_eq!(s.len(), 16);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn random_string(len: usize, charset: &[u8]) -> io::Result<String> {
+    if charset.is_empty() {
+        return Err(invalid_charset_error(
+            "random_string: charset must be non-empty",
+        ));
+    }
+    if !charset.iter().all(|&b| b < 128) {
+        return Err(invalid_charset_error(
+            "random_string: charset must be ASCII (every byte < 128)",
+        ));
+    }
+    let n = charset.len() as u64;
+    let mut out = String::with_capacity(len);
+    for _ in 0..len {
+        let idx = bounded_u64(n)? as usize;
+        out.push(charset[idx] as char);
+    }
+    Ok(out)
+}
+
+/// Generate a cryptographically-secure ASCII alphanumeric string
+/// (`A-Z`, `a-z`, `0-9`) of exactly `len` characters.
+///
+/// Equivalent to `random_string(len, charsets::ALPHANUMERIC)`.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+/// let token = tier3::random_alphanumeric(32)?;
+/// assert_eq!(token.len(), 32);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[inline]
+pub fn random_alphanumeric(len: usize) -> io::Result<String> {
+    random_string(len, crate::charsets::ALPHANUMERIC)
+}
+
+/// Generate a cryptographically-secure ASCII alphabetic string
+/// (`A-Z`, `a-z`) of exactly `len` characters.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+/// let s = tier3::random_alpha(12)?;
+/// assert_eq!(s.len(), 12);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[inline]
+pub fn random_alpha(len: usize) -> io::Result<String> {
+    random_string(len, crate::charsets::ALPHA)
+}
+
+/// Generate a cryptographically-secure ASCII numeric string (`0-9`)
+/// of exactly `len` characters. Leading zeros may appear.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+/// let s = tier3::random_numeric(6)?;
+/// assert_eq!(s.len(), 6);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[inline]
+pub fn random_numeric(len: usize) -> io::Result<String> {
+    random_string(len, crate::charsets::NUMERIC)
+}
+
+/// Generate a cryptographically-secure lowercase hex string (`0-9`,
+/// `a-f`) of exactly `len` characters.
+///
+/// **Distinct from [`random_hex`]**: [`random_hex`] takes a byte
+/// count and returns `bytes * 2` hex characters; this function takes
+/// a character count directly. Both produce identical entropy per
+/// character but accept different argument units.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+/// let s = tier3::random_hex_string(40)?;
+/// assert_eq!(s.len(), 40);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[inline]
+pub fn random_hex_string(len: usize) -> io::Result<String> {
+    random_string(len, crate::charsets::HEX_LOWER)
+}
+
+// ------------------------------------------------------------
+// Collection operations — cryptographic shuffle
+// ------------------------------------------------------------
+
+/// In-place cryptographically-secure uniform Fisher-Yates shuffle.
+///
+/// Every permutation of `slice` is equally likely under the OS
+/// CSPRNG. O(n) time, no allocation. Each swap consumes one
+/// `random_u64` worth of entropy from Tier 3.
+///
+/// # Errors
+///
+/// Returns `io::Error` if the OS CSPRNG is unavailable. If the call
+/// fails mid-shuffle, the slice is left in a partially-shuffled state
+/// but still contains exactly its original elements.
+///
+/// # Example
+///
+/// ```
+/// use mod_rand::tier3;
+/// let mut deck: Vec<u8> = (0..52).collect();
+/// tier3::shuffle(&mut deck)?;
+/// // deck is now a uniformly-random permutation.
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn shuffle<T>(slice: &mut [T]) -> io::Result<()> {
+    let n = slice.len();
+    if n < 2 {
+        return Ok(());
+    }
+    for i in (1..n).rev() {
+        // Pick j uniformly in [0, i]. i fits in u64 because n <= usize::MAX
+        // and usize <= u64 on every supported target.
+        let span = (i as u64) + 1;
+        let j = bounded_u64(span)? as usize;
+        slice.swap(i, j);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

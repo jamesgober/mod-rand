@@ -64,4 +64,54 @@ fn main() {
     bench("random_range_inclusive_u64(0..=u64::MAX)", || {
         tier3::random_range_inclusive_u64(0..=u64::MAX).unwrap()
     });
+
+    // ------------------------------------------------------------
+    // Additional widths, string helpers, and shuffle added in 1.0
+    // ------------------------------------------------------------
+    println!();
+
+    bench("random_range_u8(0..100)", || {
+        tier3::random_range_u8(0..100).unwrap()
+    });
+    bench("random_range_u16(0..1000)", || {
+        tier3::random_range_u16(0..1000).unwrap()
+    });
+    bench("random_range_u128(0..u128::MAX/2)", || {
+        tier3::random_range_u128(0..(u128::MAX / 2)).unwrap()
+    });
+    bench("random_range_inclusive_u128(0..=u128::MAX)", || {
+        tier3::random_range_inclusive_u128(0..=u128::MAX).unwrap()
+    });
+    bench("random_range_i128(-1M..1M)", || {
+        tier3::random_range_i128(-1_000_000..1_000_000).unwrap()
+    });
+
+    println!();
+
+    bench("random_alphanumeric(16)", || {
+        tier3::random_alphanumeric(16).unwrap()
+    });
+    bench("random_alphanumeric(64)", || {
+        tier3::random_alphanumeric(64).unwrap()
+    });
+    bench("random_hex_string(32)", || {
+        tier3::random_hex_string(32).unwrap()
+    });
+
+    println!();
+
+    {
+        let mut v: Vec<u32> = (0..52).collect();
+        bench("shuffle(52)", || {
+            tier3::shuffle(&mut v).unwrap();
+            v[0]
+        });
+    }
+    {
+        let mut v: Vec<u32> = (0..1000).collect();
+        bench("shuffle(1000)", || {
+            tier3::shuffle(&mut v).unwrap();
+            v[0]
+        });
+    }
 }

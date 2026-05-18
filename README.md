@@ -4,7 +4,7 @@
   <code>mod-rand</code>
   <br>
   <sup>
-    <sub>TIERED RANDOM NUMBER GENERATION FOR RUST</sub>
+    <sub>TIERED RANDOMNESS FOR RUST</sub>
   </sup>
 </h1>
 
@@ -17,41 +17,94 @@
 </p>
 
 <p align="center">
-    Fast PRNG, process-unique seeds, and OS-backed cryptographic random<br>
-    in one zero-dependency library. Pick the tier appropriate to your threat model.
+    Numbers, bytes, strings, tokens, and collection ops (shuffle, sample,<br>
+    weighted choice) at three explicit threat-model tiers — one zero-dependency library.
 </p>
 
 ---
 
-## What it does
+## What it is
 
-Random number generation in Rust today forces a choice: pull in the
-heavy `rand` ecosystem (multiple crates, opinionated traits, generic
-overhead) or write your own. `mod-rand` is the middle ground — three
-clearly-tiered random sources in one library, zero external
-dependencies, MSRV 1.75.
+`mod-rand` is a tiered **randomness** library for Rust. Three concrete
+random sources, each chosen to be excellent for one threat model;
+every operation you'd reach for — bounded integer ranges, byte
+buffers, hex tokens, random or process-unique strings, shuffles,
+samples, and weighted choice — exposed at the appropriate tier.
 
-## The three tiers
+Zero runtime dependencies. MSRV `1.75`. API locked under SemVer
+for the entire `1.x` line.
 
 ```rust
-use mod_rand::{tier1, tier2, tier3};
+use mod_rand::tier1::Xoshiro256;
+use mod_rand::{tier2, tier3};
 
-// Tier 1: Fast deterministic PRNG — for simulations and test fixtures.
-let mut rng = tier1::Xoshiro256::seed_from_u64(42);
-let n: u64 = rng.next_u64();
+// Tier 1 — fast deterministic PRNG (xoshiro256**). Reproducible from a seed.
+let mut rng = Xoshiro256::seed_from_u64(42);
+let n: u64       = rng.next_u64();
+let pct: u32     = rng.gen_range_u32(0..100);
+let token: String = rng.gen_alphanumeric(16);
 
-// Tier 2: Process-unique seeds — for tempdir names and request IDs.
-let name: String = tier2::unique_name(8);
+// Tier 2 — process-unique values. Tempdir names, request IDs.
+let id: String = tier2::unique_name(12);
 
-// Tier 3: Cryptographic random — for tokens and keys.
-let token: String = tier3::random_hex(16)?;
+// Tier 3 — OS-backed cryptographic random. Tokens, keys, session IDs.
+let secret: String = tier3::random_hex(32)?;
 # Ok::<(), std::io::Error>(())
 ```
 
-Bounded ranges — every tier exposes a parallel family of bounded-range
-methods using Rust's range syntax (`..` half-open, `..=` inclusive).
-All variants use Lemire's "Nearly Divisionless" rejection sampling, so
-output is uniformly distributed with no modulo bias:
+## What it covers
+
+Every category of randomness operation that's in scope, at every tier
+where it makes sense.
+
+| Operation                              | Tier 1 (PRNG)      | Tier 2 (process-unique) | Tier 3 (crypto) |
+|----------------------------------------|--------------------|--------------------------|-----------------|
+| Raw `u32` / `u64` draws                | `next_u32` / `next_u64` | `unique_u64`            | `random_u32` / `random_u64` |
+| Fill a `&mut [u8]`                     | `fill_bytes`       | —                        | `fill_bytes`     |
+| Bounded integer ranges (every width)   | `gen_range_*`      | `range_*`                | `random_range_*` |
+| 128-bit integer ranges                 | `gen_range_u128` / `i128` | `range_u128` / `i128` | `random_range_u128` / `i128` |
+| Uniform `f64` / `f32`                  | `gen_f64` / `gen_f32` / `next_f64` | —                | —               |
+| Bernoulli trial                        | `gen_bool(p)`      | —                        | —               |
+| Hex strings                            | `gen_hex(len)`     | `unique_hex(len)` / `random_hex_string(len)` | `random_hex(bytes)` / `random_hex_string(len)` |
+| Alphanumeric strings                   | `gen_alphanumeric` | `unique_name` / `random_alphanumeric` | `random_alphanumeric` |
+| Arbitrary-charset strings              | `gen_string`       | `random_string`          | `random_string` |
+| Base32 / base58 / base64 / URL-safe    | via `charsets::*`  | via `charsets::*`        | via `charsets::*` |
+| Shuffle a `&mut [T]`                   | `shuffle`          | —                        | `shuffle`        |
+| Sample `k` without replacement         | `sample`           | —                        | —               |
+| Weighted choice                        | `weighted_choice` / `weighted_index` | —          | —               |
+| Stream splitting (`2^128` / `2^192`)   | `jump` / `long_jump` | —                      | —               |
+
+Tier 1 is `no_std`-compatible for everything that doesn't require
+allocation. Tier 2 and Tier 3 require `std` (default feature).
+
+## The three tiers
+
+Pick by threat model, not by speed.
+
+| Tier | Algorithm | Use case | Crypto-safe |
+|------|-----------|----------|-------------|
+| 1 | xoshiro256\*\* (splitmix64-seeded) | Simulation, fixtures, shuffling, non-security strings | No |
+| 2 | PID + nanos + atomic counter + Stafford-mix-13 | Tempdir names, request IDs, log correlation IDs | No |
+| 3 | OS syscall (`getrandom` / `BCryptGenRandom` / `getentropy`) | Tokens, keys, session IDs, password salts | Yes |
+
+| Question                                           | Tier |
+|----------------------------------------------------|------|
+| Is the value reproducible from a seed?             | 1    |
+| Must two calls inside one process always differ?   | 2    |
+| Could an attacker benefit from predicting it?      | 3    |
+
+If the answer to the third question is "yes" — even maybe — use Tier 3.
+
+## Bounded ranges — every integer width
+
+Every tier exposes `gen_range_*` / `range_*` / `random_range_*`
+methods using Rust's range syntax. `..` is half-open, `..=` is
+inclusive; the caller's choice is the contract. All bounded methods
+use **Daniel Lemire's "Nearly Divisionless"** rejection sampling, so
+output is uniformly distributed — no modulo bias.
+
+Widths covered: `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, and the
+signed counterparts.
 
 ```rust
 use mod_rand::tier1::Xoshiro256;
@@ -59,69 +112,217 @@ use mod_rand::{tier2, tier3};
 
 let mut rng = Xoshiro256::seed_from_u64(42);
 
-let pct: u32 = rng.gen_range_u32(0..100);          // [0, 100)
-let die: u32 = rng.gen_range_inclusive_u32(1..=6); // [1, 6]
+let byte: u8   = rng.gen_range_inclusive_u8(0..=255);
+let pct:  u32  = rng.gen_range_u32(0..100);
+let big:  u128 = rng.gen_range_u128(0..(u128::MAX / 2));
+let die:  u32  = rng.gen_range_inclusive_u32(1..=6);   // classic d6
 
 let id     = tier2::range_inclusive_u32(1..=1_000);
 let secret = tier3::random_range_inclusive_u64(0..=u64::MAX)?;
 # Ok::<(), std::io::Error>(())
 ```
 
-| Tier | Algorithm | Use case | Crypto-safe |
-|------|-----------|----------|-------------|
-| 1 | xoshiro256\*\* (splitmix64-seeded) | Simulation, fixtures, shuffling | No |
-| 2 | PID + nanos + counter + Stafford-mix-13 | Tempdir names, request IDs | No |
-| 3 | OS syscall (`getrandom`/`BCryptGenRandom`/`getentropy`) | Tokens, keys, session IDs | Yes |
+The 128-bit ranges generalise Lemire's algorithm to a 256-bit
+intermediate via two `u64` draws; the full-width inclusive
+`0..=u128::MAX` is special-cased to a raw 128-bit reinterpret.
+
+## String generation
+
+Custom charset, or a pick from the standard ones in
+[`mod_rand::charsets`](https://docs.rs/mod-rand/latest/mod_rand/charsets/index.html).
+
+```rust
+use mod_rand::tier1::Xoshiro256;
+use mod_rand::{charsets, tier2, tier3};
+
+let mut rng = Xoshiro256::seed_from_u64(1);
+
+// Tier 1 — deterministic from the seed.
+let id    = rng.gen_alphanumeric(16);
+let hex   = rng.gen_hex(32);
+let pin   = rng.gen_numeric(6);
+
+// Custom charset — pick from charsets:: or supply your own &[u8].
+let url   = rng.gen_string(24, charsets::URL_SAFE);
+let coin  = rng.gen_string(20, charsets::BASE58);
+
+// Tier 2 — `unique_*` guarantees per-call distinctness;
+// `random_*` guarantees a uniform distribution. Both ship.
+let name  = tier2::unique_name(12);             // distinct across calls
+let token = tier2::random_alphanumeric(16);     // uniform distribution
+
+// Tier 3 — cryptographic.
+let key   = tier3::random_alphanumeric(32)?;
+# Ok::<(), std::io::Error>(())
+```
+
+Charset constants in `mod_rand::charsets`: `ALPHANUMERIC`, `ALPHA`,
+`ALPHA_LOWER`, `ALPHA_UPPER`, `NUMERIC`, `HEX_LOWER`, `HEX_UPPER`,
+`URL_SAFE` (RFC 4648 §5), `BASE58` (Bitcoin alphabet), `BASE64`
+(RFC 4648 §4). Custom charsets are accepted as `&[u8]`; non-ASCII
+charsets are rejected (panic on Tier 1 / Tier 2; `InvalidInput` on
+Tier 3) so the returned `String` is always valid UTF-8.
+
+## Collection operations
+
+Fisher-Yates shuffle, sample-without-replacement, and weighted
+choice. Available on Tier 1 (deterministic, reproducible) and
+Tier 3 shuffle (cryptographic).
+
+```rust
+use mod_rand::tier1::Xoshiro256;
+use mod_rand::tier3;
+
+let mut rng = Xoshiro256::seed_from_u64(1);
+
+// Shuffle in place. Uniform over all n! permutations.
+let mut hand: Vec<u8> = (0..52).collect();
+rng.shuffle(&mut hand);
+
+// Sample k references without replacement, in source-slice order.
+let pool: Vec<&str> = vec!["alice", "bob", "carol", "dave", "erin"];
+let chosen: Vec<&&str> = rng.sample(&pool, 2);
+
+// Weighted choice over a probability vector.
+let items   = ["common", "uncommon", "rare", "epic"];
+let weights = [70.0, 20.0, 8.0, 2.0];
+let drop    = rng.weighted_choice(&items, &weights).unwrap();
+
+// Cryptographic shuffle — every permutation drawn from the OS CSPRNG.
+let mut deck: Vec<u8> = (0..52).collect();
+tier3::shuffle(&mut deck)?;
+# Ok::<(), std::io::Error>(())
+```
 
 ## Performance
 
-Microbenchmarked on x86_64 (`cargo bench`):
+Measured on a Ryzen 9 9950X3D, Windows 11 (`cargo bench`):
 
-| Op                                  | Tier 1   | Tier 2   | Tier 3 (Windows) |
-|-------------------------------------|----------|----------|-------------------|
-| Single 64-bit value                 | ~0.6 ns  | ~20 ns   | ~35 ns            |
-| 32 random bytes                     | ~2 ns    | —        | ~55 ns            |
-| 16-byte hex token                   | —        | ~45 ns   | ~100 ns           |
-| Bounded `gen_range_u64(0..100)`     | ~0.9 ns  | ~22 ns   | ~35 ns            |
-| Die roll `..=6` (worst-case bias trap) | ~0.9 ns | ~22 ns | ~35 ns            |
+**Tier 1 — xoshiro256\*\* (target ~1 ns/u64)**
 
-Tier 1 hits **~0.6 ns/u64** — better than the 1 ns/u64 target.
-Tier 3 latency on Linux/macOS is kernel-dependent; expect 100–500 ns.
+| op                                              | time      |
+|-------------------------------------------------|-----------|
+| `next_u64`                                      | ~0.6 ns   |
+| `next_f64` / `gen_f64`                          | ~0.7 ns   |
+| `gen_f32`                                       | ~0.7 ns   |
+| `gen_bool(0.5)`                                 | ~0.8 ns   |
+| `fill_bytes(32)`                                | ~2.0 ns   |
+| `gen_range_u64(0..100)`                         | ~0.8 ns   |
+| `gen_range_inclusive_u32(1..=6)` (d6)           | ~0.9 ns   |
+| `gen_range_u8(0..100)`                          | ~0.8 ns   |
+| `gen_range_u128(0..u128::MAX/2)`                | ~2.2 ns   |
+| `gen_range_inclusive_u128(0..=u128::MAX)`       | ~1.1 ns   |
+| `gen_range_u64(0..⅔·u64::MAX)` worst-case       | ~5.9 ns   |
+| `gen_alphanumeric(16)`                          | ~58 ns    |
+| `gen_alphanumeric(64)`                          | ~115 ns   |
+| `gen_hex(32)`                                   | ~63 ns    |
+| `shuffle(10)`                                   | ~10 ns    |
+| `shuffle(100)`                                  | ~104 ns   |
+| `shuffle(1000)`                                 | ~953 ns   |
+| `shuffle(10000)`                                | ~9.5 µs   |
+| `sample(k=10, n=1000)`                          | ~905 ns   |
+| `weighted_index(10 weights)`                    | ~19 ns    |
+| `weighted_index(100 weights)`                   | ~172 ns   |
+| `weighted_index(1000 weights)`                  | ~1.1 µs   |
+
+**Tier 2 — process-unique (dominated by `SystemTime::now()`)**
+
+| op                                              | time      |
+|-------------------------------------------------|-----------|
+| `unique_u64`                                    | ~21 ns    |
+| `unique_name(8)`                                | ~42 ns    |
+| `unique_hex(16)`                                | ~47 ns    |
+| `range_u64(0..100)`                             | ~23 ns    |
+| `range_u128(0..u128::MAX/2)`                    | ~45 ns    |
+| `random_alphanumeric(16)`                       | ~420 ns   |
+
+**Tier 3 — OS CSPRNG (Windows / `BCryptGenRandom`)**
+
+| op                                              | time      |
+|-------------------------------------------------|-----------|
+| `random_u64`                                    | ~35 ns    |
+| `fill_bytes(32)`                                | ~53 ns    |
+| `fill_bytes(1024)`                              | ~224 ns   |
+| `random_hex(16)`                                | ~97 ns    |
+| `random_range_u64(0..100)`                      | ~35 ns    |
+| `random_range_u128(0..u128::MAX/2)`             | ~48 ns    |
+| `random_alphanumeric(16)`                       | ~628 ns   |
+| `random_alphanumeric(64)`                       | ~2.4 µs   |
+| `shuffle(52)` (deck of cards)                   | ~1.9 µs   |
+| `shuffle(1000)`                                 | ~38 µs    |
+
+Tier 1 beats its 1 ns/u64 target. Linux / macOS Tier 3 numbers are
+kernel-dependent; expect 100–500 ns per call on commodity hardware.
 
 ## Why this library exists
 
 - **Zero dependencies.** No `rand`, no `getrandom` crate, no `libc`.
-  Just `std`. Tier 1 even works in `no_std`.
+  Just `std`. Tier 1 works in `no_std`.
 - **Explicit threat model.** You pick the tier; you know what
   guarantees you're getting.
-- **Lower MSRV than the alternatives.** Works on Rust 1.75; many
-  random crates today require 1.85+.
-- **Fast.** Tier 1 is ~0.6 ns/u64. Tier 2 is ~20 ns. Tier 3 is one
-  syscall.
+- **Lower MSRV than the alternatives.** `1.75`. Many random crates
+  in the ecosystem require `1.85+`.
+- **Determinism contract on Tier 1.** Locked byte-for-byte under
+  SemVer for the entire `1.x` line — see
+  [`docs/STABILITY.md`](docs/STABILITY.md).
+- **One library, three tiers, every operation.** Numbers, bytes,
+  strings, tokens, shuffle, sample, weighted choice. You don't need
+  `rand` + `rand_distr` + `fastrand` + a hand-rolled crypto random.
+
+## How it compares
+
+Honest, side-by-side. The full discussion (including non-strengths)
+is in [`docs/COMPARISON.md`](docs/COMPARISON.md).
+
+|                              | `mod-rand` | `rand` + `rand_distr` | `fastrand` | `nanorand` |
+|------------------------------|------------|-----------------------|------------|------------|
+| Fast PRNG                    | ✓ Tier 1   | ✓ many                | ✓          | ✓ many     |
+| OS cryptographic random      | ✓ Tier 3   | ✓ via `getrandom`     | ✗          | ✓ ChaCha20 (userspace) |
+| Process-unique stream        | ✓ Tier 2   | partial (build yourself) | ✗       | ✗          |
+| 128-bit integer ranges       | ✓          | ✓                     | ✗          | ✗          |
+| String generation in API     | ✓          | via `Alphanumeric`    | ✗          | ✗          |
+| Shuffle / sample / weighted  | ✓          | ✓                     | shuffle    | shuffle    |
+| Named distributions          | ✗          | ✓ (`rand_distr`)      | ✗          | ✗          |
+| Generic `Rng` trait          | ✗          | ✓                     | ✗          | partial    |
+| Runtime crate dependencies   | **0**      | several (`getrandom`, etc.) | 0+ | 0+         |
+| MSRV (at time of writing)    | **1.75**   | higher                | 1.61       | 1.65       |
+
+Use `mod-rand` when its tier model fits and you want zero deps + a
+locked API. Reach for `rand` if you need named distributions or
+generic-trait ecosystem interop.
 
 ## Feature flags
 
 ```toml
 [dependencies]
-mod-rand = { version = "0.9.5", default-features = false }   # tier1 only, no_std
-mod-rand = { version = "0.9.5", features = ["tier2"] }       # + process-unique
-mod-rand = "0.9.5"                                             # all three tiers (default)
+mod-rand = { version = "1.0", default-features = false }   # tier1 only, no_std
+mod-rand = { version = "1.0", features = ["tier2"] }       # + tier2
+mod-rand = "1.0"                                             # all three tiers (default)
 ```
 
-## Status
+| Feature  | Effect                                                         |
+|----------|----------------------------------------------------------------|
+| `std`    | Required by `tier2`, `tier3`, and string generation on `tier1` |
+| `tier2`  | Enables `mod_rand::tier2`                                      |
+| `tier3`  | Enables `mod_rand::tier3`                                      |
 
-The `0.9.x` line ships the real algorithms — full xoshiro256\*\* with
-splitmix64 seeding (Tier 1), Stafford-mix-13 over PID + nanos +
-atomic counter (Tier 2), and direct platform syscalls
-(`getrandom(2)` / `BCryptGenRandom` / `getentropy(3)`) for Tier 3.
-The API is stable through the `0.9.x` series; `1.0` will pin it.
+Default features: `["std", "tier2", "tier3"]`.
 
-For tier-by-tier semantics, performance targets, and guarantees,
-see [docs/API.md](docs/API.md).
+## Documentation
+
+- [docs/API.md](docs/API.md) — hand-written API reference, tier by tier.
+- [docs/STABILITY.md](docs/STABILITY.md) — SemVer policy, determinism
+  contract, deprecation rules.
+- [docs/COMPARISON.md](docs/COMPARISON.md) — side-by-side with `rand`,
+  `fastrand`, `nanorand`.
+- [docs/API-FREEZE-AUDIT.md](docs/API-FREEZE-AUDIT.md) — full manifest
+  of every `1.0` public symbol.
+- [CHANGELOG.md](CHANGELOG.md) — release history.
 
 ## Minimum supported Rust version
 
-`1.75` — pinned in `Cargo.toml` and verified by CI.
+`1.75` — pinned in `Cargo.toml`, verified by CI on every change. An
+MSRV bump is a minor-version bump minimum.
 
 ## License
 
