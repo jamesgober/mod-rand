@@ -240,7 +240,7 @@ mod tier3_stats {
         assert!(z.abs() < 6.0, "tier3 runs-test |z| = {}", z.abs());
     }
 
-    /// 10 000 calls of 32 bytes each — verifies syscall robustness
+    /// 10 000 calls of 32 bytes each — verifies syscall stability
     /// over time.
     #[test]
     fn stress_ten_thousand_calls() {
