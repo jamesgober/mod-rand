@@ -4,22 +4,41 @@
 //! time, and a monotonic atomic counter, then run through several
 //! rounds of a strong scalar mixer. Good for:
 //!
-//! - Tempdir / temp-file names
 //! - Request and trace IDs
 //! - Log correlation IDs
+//! - Temp names inside a directory only this process (or user) can
+//!   write to
 //! - Any application-level "good-enough" uniqueness
 //!
-//! **Not cryptographic.** An attacker who can observe outputs can
-//! often reconstruct internal state and predict subsequent values. Use
-//! [`tier3`](crate::tier3) for security-sensitive randomness.
+//! **Not cryptographic, and predictable.** Someone who sees a couple
+//! of outputs can work out the values this process will produce next.
+//! Never use this tier for tokens, passwords, keys, session IDs, or
+//! anything else that must be hard to guess. Use
+//! [`tier3`](crate::tier3) (also reachable as
+//! [`secure`](crate::secure)) for those.
 //!
-//! ## Uniqueness guarantees
+//! **Temp files in shared directories.** Because names are
+//! predictable, another user of a shared directory such as `/tmp` can
+//! create the next names first. For files or directories there, build
+//! the name with [`tier3::random_base32`](crate::tier3::random_base32),
+//! create it with `OpenOptions::create_new(true)` or `create_dir`, and
+//! retry on `AlreadyExists`.
 //!
-//! - Within a single process: every [`unique_u64`] call returns a
-//!   distinct value (guaranteed by a never-resetting atomic counter,
-//!   modulo wrap at `2^64` calls — about 584 years at 1 GHz).
+//! ## Uniqueness
+//!
+//! - Within a single process: two [`unique_u64`] calls in the same
+//!   clock tick always differ (the atomic counter is mixed in last).
+//!   Calls in different ticks are distinct with high probability, but
+//!   not guaranteed: collisions follow the birthday bound for 64-bit
+//!   values, about 1 in 500 after `2^28` calls and likely after `2^32`
+//!   calls. Do not use a `unique_u64` as a key that must never repeat
+//!   over billions of calls.
+//! - Shortened forms carry fewer bits: [`unique_name`] and
+//!   [`unique_base32`] carry 5 bits per character and [`unique_hex`] 4,
+//!   so `unique_name(4)` (20 bits) repeats after about a thousand
+//!   calls.
 //! - Across processes on the same host: PID + nanosecond timestamp
-//!   make collisions vanishingly unlikely.
+//!   make collisions unlikely.
 //! - Across hosts: this tier makes no claims. Use [`tier3`](crate::tier3)
 //!   when you need values unique across machines.
 //!
@@ -55,8 +74,11 @@ static PROCESS_SALT: AtomicU64 = AtomicU64::new(0);
 /// Combines PID, the current `SystemTime` in nanoseconds, an atomic
 /// counter, and a per-process salt; passes the result through a
 /// strong scalar mixer (variant of MurmurHash3's finalizer / Stafford
-/// mix 13). Output is uniform-looking but not unpredictable to an
-/// adversary who has seen prior outputs.
+/// mix 13). Output is uniform-looking but predictable to anyone who
+/// has seen prior outputs, so it is never a secret.
+///
+/// Values are distinct with high probability, not always: see the
+/// [module docs](self#uniqueness) for the collision rate.
 ///
 /// # Example
 ///
@@ -93,10 +115,16 @@ pub fn unique_u64() -> u64 {
 /// Produce a process-unique base32 (Crockford alphabet) name of
 /// exactly `len` characters.
 ///
-/// Suitable for tempdir and temp-file names, correlation IDs, and the
-/// like. The Crockford alphabet (`0-9A-Z` with `I`, `L`, `O`, `U`
-/// removed) is filesystem-safe on every platform and avoids visually
-/// ambiguous characters.
+/// Suitable for correlation IDs, and for temp names inside a directory
+/// only this process (or user) can write to. The name is predictable,
+/// so in a shared directory such as `/tmp` use
+/// [`tier3::random_base32`](crate::tier3::random_base32) instead (see
+/// the [module docs](self)). The Crockford alphabet (`0-9A-Z` with
+/// `I`, `L`, `O`, `U` removed) is filesystem-safe on every platform
+/// and avoids visually ambiguous characters.
+///
+/// Each character carries 5 bits; use 13 or more characters when names
+/// must not repeat.
 ///
 /// # Example
 ///
@@ -221,8 +249,8 @@ fn process_salt() -> u64 {
 // The result is uniformly distributed over the requested range — no
 // modulo bias.
 //
-// Note on guarantees: Tier 2 raw `unique_u64` output is guaranteed
-// distinct across calls within a single process. The bounded-range
+// Note on guarantees: Tier 2 raw `unique_u64` output is distinct
+// across calls with high probability (see the module docs). The bounded-range
 // reductions DO NOT preserve that guarantee — multiple distinct u64
 // values necessarily map to the same bounded value when the range is
 // smaller than 2^64. Callers who need distinct bounded values must
@@ -780,11 +808,11 @@ pub fn range_inclusive_isize(range: RangeInclusive<isize>) -> isize {
 // ------------------------------------------------------------
 // String generation
 //
-// Distinct from `unique_*` — these are sampled-uniformly strings
-// without the per-call distinctness guarantee. Use `unique_*` when you
-// need every call to return a different value (tempdir names,
-// correlation IDs); use `random_*` for password-style content where
-// uniformity matters more than collision-freedom.
+// Deprecated since 1.1.0. These share their names with the tier3
+// functions but are predictable, so a wrong import produced weak
+// tokens without any warning. Tier 2 output is never a token, a
+// password, or a key: use the tier3 (`secure`) functions for those,
+// and `unique_*` for IDs and names.
 // ------------------------------------------------------------
 
 /// Generate a random string of exactly `len` characters drawn from
@@ -799,13 +827,22 @@ pub fn range_inclusive_isize(range: RangeInclusive<isize>) -> isize {
 /// (`byte >= 128`). The ASCII guard preserves UTF-8 validity of the
 /// returned `String`.
 ///
+/// **Deprecated: predictable output.** This is not a token or a
+/// password generator. Use [`tier3::random_string`](crate::tier3::random_string) for
+/// anything that must be hard to guess.
+///
 /// # Example
 ///
 /// ```
+/// # #![allow(deprecated)]
 /// use mod_rand::{tier2, charsets};
 /// let s = tier2::random_string(16, charsets::ALPHANUMERIC);
 /// assert_eq!(s.len(), 16);
 /// ```
+#[deprecated(
+    since = "1.1.0",
+    note = "predictable: never use for tokens or passwords. Use `tier3::random_string` (returns io::Result) for secrets, or `unique_name` / `unique_hex` for IDs"
+)]
 pub fn random_string(len: usize, charset: &[u8]) -> String {
     assert!(
         !charset.is_empty(),
@@ -829,14 +866,24 @@ pub fn random_string(len: usize, charset: &[u8]) -> String {
 ///
 /// Equivalent to `random_string(len, charsets::ALPHANUMERIC)`.
 ///
+/// **Deprecated: predictable output.** This is not a token or a
+/// password generator. Use [`tier3::random_alphanumeric`](crate::tier3::random_alphanumeric) for
+/// anything that must be hard to guess.
+///
 /// # Example
 ///
 /// ```
+/// # #![allow(deprecated)]
 /// use mod_rand::tier2;
 /// let s = tier2::random_alphanumeric(12);
 /// assert_eq!(s.len(), 12);
 /// ```
+#[deprecated(
+    since = "1.1.0",
+    note = "predictable: never use for tokens or passwords. Use `tier3::random_alphanumeric` (returns io::Result) for secrets, or `unique_name` / `unique_hex` for IDs"
+)]
 #[inline]
+#[allow(deprecated)]
 pub fn random_alphanumeric(len: usize) -> String {
     random_string(len, crate::charsets::ALPHANUMERIC)
 }
@@ -844,14 +891,24 @@ pub fn random_alphanumeric(len: usize) -> String {
 /// Generate a random ASCII alphabetic string (`A-Z`, `a-z`) of exactly
 /// `len` characters.
 ///
+/// **Deprecated: predictable output.** This is not a token or a
+/// password generator. Use [`tier3::random_alpha`](crate::tier3::random_alpha) for
+/// anything that must be hard to guess.
+///
 /// # Example
 ///
 /// ```
+/// # #![allow(deprecated)]
 /// use mod_rand::tier2;
 /// let s = tier2::random_alpha(8);
 /// assert_eq!(s.len(), 8);
 /// ```
+#[deprecated(
+    since = "1.1.0",
+    note = "predictable: never use for tokens or passwords. Use `tier3::random_alpha` (returns io::Result) for secrets, or `unique_name` / `unique_hex` for IDs"
+)]
 #[inline]
+#[allow(deprecated)]
 pub fn random_alpha(len: usize) -> String {
     random_string(len, crate::charsets::ALPHA)
 }
@@ -859,14 +916,24 @@ pub fn random_alpha(len: usize) -> String {
 /// Generate a random ASCII numeric string (`0-9`) of exactly `len`
 /// characters. Leading zeros may appear.
 ///
+/// **Deprecated: predictable output.** This is not a token or a
+/// password generator. Use [`tier3::random_numeric`](crate::tier3::random_numeric) for
+/// anything that must be hard to guess.
+///
 /// # Example
 ///
 /// ```
+/// # #![allow(deprecated)]
 /// use mod_rand::tier2;
 /// let s = tier2::random_numeric(6);
 /// assert_eq!(s.len(), 6);
 /// ```
+#[deprecated(
+    since = "1.1.0",
+    note = "predictable: never use for tokens or passwords. Use `tier3::random_numeric` (returns io::Result) for secrets, or `unique_name` / `unique_hex` for IDs"
+)]
 #[inline]
+#[allow(deprecated)]
 pub fn random_numeric(len: usize) -> String {
     random_string(len, crate::charsets::NUMERIC)
 }
@@ -877,14 +944,24 @@ pub fn random_numeric(len: usize) -> String {
 /// Distinct from [`unique_hex`]: this function makes no uniqueness
 /// guarantee but draws each character uniformly from the hex alphabet.
 ///
+/// **Deprecated: predictable output.** This is not a token or a
+/// password generator. Use [`tier3::random_hex_string`](crate::tier3::random_hex_string) for
+/// anything that must be hard to guess.
+///
 /// # Example
 ///
 /// ```
+/// # #![allow(deprecated)]
 /// use mod_rand::tier2;
 /// let s = tier2::random_hex_string(32);
 /// assert_eq!(s.len(), 32);
 /// ```
+#[deprecated(
+    since = "1.1.0",
+    note = "predictable: never use for tokens or passwords. Use `tier3::random_hex_string` (returns io::Result) for secrets, or `unique_name` / `unique_hex` for IDs"
+)]
 #[inline]
+#[allow(deprecated)]
 pub fn random_hex_string(len: usize) -> String {
     random_string(len, crate::charsets::HEX_LOWER)
 }
@@ -931,9 +1008,9 @@ mod tests {
 
     #[test]
     fn unique_u64_collision_free_at_scale() {
-        // 1 000 000 calls — every value must be distinct (counter
-        // guarantee). This is the headline correctness property of
-        // tier2.
+        // 1 000 000 calls: every value should be distinct. At this
+        // size a birthday collision has odds of about 1 in 3.7e7, so a
+        // failure here means a real defect.
         let n = 1_000_000;
         let mut set = HashSet::with_capacity(n);
         for _ in 0..n {

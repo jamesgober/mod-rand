@@ -1,10 +1,14 @@
-//! Tier 2 — process-unique temp paths.
+//! Tier 2: process-unique names and IDs.
 //!
-//! Demonstrates the canonical use case: a process needs a flurry of
-//! distinct identifiers (here, hypothetical tempdir names) that don't
-//! need to be unguessable, just non-colliding. Tier 2 is exactly the
-//! right shape: ~20–70 ns per call, distinct within a process by
-//! construction.
+//! Tier 2 gives a flurry of identifiers that don't need to be
+//! unguessable, just distinct: trace IDs, log correlation IDs, and
+//! scratch names inside a directory only this process (or user) can
+//! write to. About 20 to 70 ns per call.
+//!
+//! Tier 2 names are predictable. For a file or directory in a shared
+//! directory such as `/tmp`, build the name with
+//! `tier3::random_base32` instead, create it with `create_new(true)` /
+//! `create_dir`, and retry on `AlreadyExists`.
 //!
 //! Run with: `cargo run --release --example tier2_tempdir`.
 
@@ -12,10 +16,10 @@
 fn main() {
     use mod_rand::tier2;
 
-    println!("Process-unique tempdir-style names (Crockford base32):");
+    println!("Process-unique scratch names for a private directory (Crockford base32):");
     for _ in 0..5 {
         let name = tier2::unique_name(16);
-        println!("  /tmp/build-{name}");
+        println!("  ./my-private-cache/build-{name}");
     }
 
     println!();
@@ -26,7 +30,7 @@ fn main() {
     }
 
     println!();
-    println!("Raw u64s — every call distinct:");
+    println!("Raw u64s (distinct with high probability, never secret):");
     for _ in 0..5 {
         println!("  {:#018x}", tier2::unique_u64());
     }

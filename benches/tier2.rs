@@ -4,6 +4,8 @@
 //!
 //! Target: <100 ns/call. Cost is dominated by `SystemTime::now()`.
 
+#![allow(deprecated)] // benchmarks the deprecated tier2 string functions
+
 #[path = "common.rs"]
 mod common;
 

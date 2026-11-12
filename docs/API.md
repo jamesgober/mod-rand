@@ -135,6 +135,12 @@ impl Xoshiro256 {
 
 ### Non-guarantees
 
+- **Not secret, and predictable.** Someone who has seen a couple of
+  outputs can work out later ones. Never use tier 2 for tokens,
+  passwords, keys or session IDs. In a shared directory such as
+  `/tmp`, use `tier3::random_base32` for names, create with
+  `create_new(true)` / `create_dir`, and retry on `AlreadyExists`.
+
 - **Not cryptographic.** An adversary who observes ~2 KiB of output
   can recover the internal state in linear time and predict every
   subsequent draw. Use Tier 3 for tokens.
@@ -229,10 +235,14 @@ returns the empty string and makes no allocation.
 
 ### Guarantees
 
-- **Distinct within a process for raw `unique_u64`.** Two calls to
-  `unique_u64()` from the same process never return the same value
-  (counter monotonically increments; values mix it in such that it
-  cannot be cancelled).
+- **Distinct within a clock tick for raw `unique_u64`.** Two calls
+  in the same clock tick never return the same value (the counter is
+  mixed in last). Across ticks, values are distinct only with high
+  probability: collisions follow the birthday bound for 64-bit
+  values, about 1 in 500 after `2^28` calls and likely after `2^32`.
+  Do not rely on `unique_u64` as a key that must never repeat over
+  billions of calls. Short `unique_name` / `unique_hex` strings carry
+  5 or 4 bits per character and repeat much sooner.
 - **Likely-distinct across processes.** PID + nanos make collisions
   vanishingly unlikely between independent processes on the same
   host.
@@ -324,13 +334,14 @@ pub fn random_range_inclusive_i32(range: RangeInclusive<i32>) -> io::Result<i32>
 | Other Unix   | `/dev/urandom`                          |
 | Other        | `io::ErrorKind::Unsupported`            |
 
-On Linux, if `getrandom` returns `ENOSYS` (kernel older than 3.17 —
-older than every supported Rust target), the implementation falls
-back to `/dev/urandom`. **This is not a security downgrade** —
-`/dev/urandom` is a fully-supported cryptographic source on every
-listed platform; it is, in fact, the source `getrandom` ultimately
-draws from. The fallback is *only* taken on `ENOSYS` (the syscall
-does not exist), never on a *failed* syscall.
+On Linux, `getrandom` returns `ENOSYS` both when the kernel is older
+than 3.17 (the syscall does not exist) and when a sandbox blocks it.
+Since `1.1.0` the kernel version from `uname(2)` decides: below 3.17
+the implementation reads `/dev/urandom` instead (on those kernels
+`/dev/urandom` does not wait for the entropy pool at early boot);
+on 3.17 or newer, or when the version cannot be read, the `ENOSYS`
+error is returned. The fallback is never taken on a *failed* or
+*blocked* syscall.
 
 ### Guarantees
 
@@ -352,7 +363,8 @@ The returned `io::Error` preserves the OS error code via
 `io::Error::from_raw_os_error`. On Windows, the NTSTATUS is embedded
 in the error message. Common cases:
 
-- **Sandboxed process (Linux seccomp filter)** — error.
+- **Sandboxed process (Linux seccomp filter)**: error, whether the
+  filter reports `EPERM` or `ENOSYS`.
 - **macOS sandbox blocking entropy** — error.
 - **Kernel entropy pool not yet seeded (very early boot)** — the
   syscall *blocks* rather than failing. This is the desired
@@ -384,15 +396,20 @@ Linux and macOS numbers are kernel-dependent; expect 100–500 ns per
 call on commodity hardware. The rejection-sampling overhead is in
 the syscall noise.
 
+Since `1.1.0` the string functions and `shuffle` read up to 256 bytes
+per syscall instead of one syscall per character or swap, so a
+32-character token costs one syscall. Nothing is buffered between
+calls.
+
 ---
 
 ## Feature flags
 
 ```toml
 [dependencies]
-mod-rand = { version = "0.9", default-features = false }   # tier1 only, no_std
-mod-rand = { version = "0.9", features = ["tier2"] }       # + tier2
-mod-rand = "0.9"                                             # all three tiers (default)
+mod-rand = { version = "1", default-features = false }     # tier1 only, no_std
+mod-rand = { version = "1", features = ["tier2"] }         # + tier2
+mod-rand = "1"                                               # all three tiers (default)
 ```
 
 | Feature  | Pulls in   | Effect                          |
@@ -480,9 +497,11 @@ reduction step.
 `random_string(len, charset)`, `random_alphanumeric(len)`,
 `random_alpha(len)`, `random_numeric(len)`, `random_hex_string(len)`.
 
-These complement, do not replace, the existing `unique_*` family —
-`unique_*` guarantees per-call distinctness; `random_*` guarantees
-a uniform distribution. Both ship.
+**Deprecated since `1.1.0`.** They share their names with the tier 3
+functions but their output is predictable, so a wrong import gave
+weak tokens with no warning. They still work and will stay for the
+whole `1.x` line. Use the tier 3 (`secure`) functions for anything
+that must be hard to guess, and `unique_*` for IDs.
 
 ### Tier 3
 
