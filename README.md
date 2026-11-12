@@ -42,9 +42,9 @@ use mod_rand::{tier2, tier3};
 let mut rng = Xoshiro256::seed_from_u64(42);
 let n: u64       = rng.next_u64();
 let pct: u32     = rng.gen_range_u32(0..100);
-let token: String = rng.gen_alphanumeric(16);
+let label: String = rng.gen_alphanumeric(16); // reproducible, never a secret
 
-// Tier 2 — process-unique values. Tempdir names, request IDs.
+// Tier 2: process-unique values. Request IDs, log correlation.
 let id: String = tier2::unique_name(12);
 
 // Tier 3 — OS-backed cryptographic random. Tokens, keys, session IDs.
@@ -65,9 +65,9 @@ where it makes sense.
 | 128-bit integer ranges                 | `gen_range_u128` / `i128` | `range_u128` / `i128` | `random_range_u128` / `i128` |
 | Uniform `f64` / `f32`                  | `gen_f64` / `gen_f32` / `next_f64` | —                | —               |
 | Bernoulli trial                        | `gen_bool(p)`      | —                        | —               |
-| Hex strings                            | `gen_hex(len)`     | `unique_hex(len)` / `random_hex_string(len)` | `random_hex(bytes)` / `random_hex_string(len)` |
-| Alphanumeric strings                   | `gen_alphanumeric` | `unique_name` / `random_alphanumeric` | `random_alphanumeric` |
-| Arbitrary-charset strings              | `gen_string`       | `random_string`          | `random_string` |
+| Hex strings                            | `gen_hex(len)`     | `unique_hex(len)`        | `random_hex(bytes)` / `random_hex_string(len)` |
+| Alphanumeric strings                   | `gen_alphanumeric` | `unique_name`            | `random_alphanumeric` |
+| Arbitrary-charset strings              | `gen_string`       | (deprecated)             | `random_string` |
 | Base32 / base58 / base64 / URL-safe    | via `charsets::*`  | via `charsets::*`        | via `charsets::*` |
 | Shuffle a `&mut [T]`                   | `shuffle`          | —                        | `shuffle`        |
 | Sample `k` without replacement         | `sample`           | —                        | —               |
@@ -84,13 +84,21 @@ Pick by threat model, not by speed.
 | Tier | Algorithm | Use case | Crypto-safe |
 |------|-----------|----------|-------------|
 | 1 | xoshiro256\*\* (splitmix64-seeded) | Simulation, fixtures, shuffling, non-security strings | No |
-| 2 | PID + nanos + atomic counter + Stafford-mix-13 | Tempdir names, request IDs, log correlation IDs | No |
-| 3 | OS syscall (`getrandom` / `BCryptGenRandom` / `getentropy`) | Tokens, keys, session IDs, password salts | Yes |
+| 2 | PID + nanos + atomic counter + Stafford-mix-13 | Request IDs, log correlation IDs, names in private directories | No |
+| 3 | OS syscall (`getrandom` / `BCryptGenRandom` / `getentropy`) | Tokens, passwords, keys, session IDs, salts, temp names in shared directories | Yes |
+
+Each tier is also reachable under a plain name: `mod_rand::secure`
+(tier 3), `mod_rand::unique` (tier 2) and `mod_rand::seeded`
+(tier 1). They are the same modules.
+
+Tier 1 and tier 2 output is predictable. Never use either for a
+token, a password, a key, or a temp name in a shared directory such
+as `/tmp`, where another user could create the next name first.
 
 | Question                                           | Tier |
 |----------------------------------------------------|------|
 | Is the value reproducible from a seed?             | 1    |
-| Must two calls inside one process always differ?   | 2    |
+| Must two calls inside one process differ (not secret)? | 2 |
 | Could an attacker benefit from predicting it?      | 3    |
 
 If the answer to the third question is "yes" — even maybe — use Tier 3.
@@ -146,13 +154,11 @@ let pin   = rng.gen_numeric(6);
 let url   = rng.gen_string(24, charsets::URL_SAFE);
 let coin  = rng.gen_string(20, charsets::BASE58);
 
-// Tier 2 — `unique_*` guarantees per-call distinctness;
-// `random_*` guarantees a uniform distribution. Both ship.
-let name  = tier2::unique_name(12);             // distinct across calls
-let token = tier2::random_alphanumeric(16);     // uniform distribution
+// Tier 2: process-unique IDs. Predictable, never a token.
+let name  = tier2::unique_name(13);             // request or log ID
 
-// Tier 3 — cryptographic.
-let key   = tier3::random_alphanumeric(32)?;
+// Tier 3: cryptographic. Tokens, passwords, keys.
+let token = tier3::random_alphanumeric(32)?;
 # Ok::<(), std::io::Error>(())
 ```
 

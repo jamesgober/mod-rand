@@ -14,12 +14,23 @@
 //! | Windows  | `BCryptGenRandom` from `bcrypt.dll`         |
 //! | Other Unix | `/dev/urandom` read                       |
 //!
-//! On Linux, if `getrandom` is unavailable (kernel older than 3.17,
-//! which is older than every supported Rust target), the
-//! implementation falls back to reading `/dev/urandom`. **`/dev/urandom`
-//! is a fully-supported cryptographic source on all listed platforms
-//! — the fallback is not a security downgrade.** It is never used as
-//! a fallback from a *failed* syscall, only from an *unavailable* one.
+//! On Linux, `getrandom` returns `ENOSYS` in two different cases: the
+//! kernel is older than 3.17 and does not have the syscall, or a
+//! sandbox (a seccomp filter, some container runtimes) blocks it and
+//! reports `ENOSYS`. Since 1.1.0 the two are told apart by the kernel
+//! version from `uname(2)`:
+//!
+//! - kernel older than 3.17: the syscall does not exist, and the
+//!   implementation reads `/dev/urandom` instead for the rest of the
+//!   process. On these kernels `/dev/urandom` does not wait for the
+//!   entropy pool to be initialised at early boot.
+//! - kernel 3.17 or newer, or a version that cannot be read: the
+//!   syscall exists and was blocked, so the call returns the `ENOSYS`
+//!   error. It does not switch to another source behind the sandbox's
+//!   back.
+//!
+//! It is never used as a fallback from a *failed* syscall, only from
+//! an *unavailable* one.
 //!
 //! On every platform, if the OS RNG cannot service the request, the
 //! call returns `io::Error`. This module will **never** fall back to
@@ -28,7 +39,8 @@
 //! ## Failure modes
 //!
 //! - On sandboxed processes (Linux seccomp, macOS sandbox) where the
-//!   syscall is filtered, you receive `io::Error`.
+//!   syscall is filtered, you receive `io::Error`, whether the filter
+//!   reports `EPERM` or `ENOSYS`.
 //! - On Linux at very early boot before the entropy pool has been
 //!   seeded, `getrandom` blocks (does not fail). This is the desired
 //!   behaviour — predictable boot-time random is the classic
@@ -45,9 +57,12 @@
 //!
 //! ## Performance
 //!
-//! One syscall worth of overhead per call (typically 100–500ns).
-//! Amortize by reading 32 or 64 bytes at a time for token generation
-//! rather than one byte at a time.
+//! One syscall worth of overhead per call (typically 100 to 500 ns).
+//! The string functions and [`shuffle`] read up to 256 bytes per
+//! syscall and draw every character or swap from that, so a 32
+//! character token costs one syscall. Nothing is kept between calls:
+//! the buffer lives on the stack for one call only, so the module
+//! stays safe across `fork()` and VM snapshots.
 
 use core::ops::{Range, RangeInclusive};
 use std::io;
@@ -64,6 +79,8 @@ mod sys {
     ///
     /// Dispatches to the platform-specific implementation.
     pub fn fill(buf: &mut [u8]) -> io::Result<()> {
+        #[cfg(test)]
+        super::test_counter::bump();
         platform::fill(buf)
     }
 
@@ -82,6 +99,19 @@ mod sys {
         extern "C" {
             fn getrandom(buf: *mut u8, buflen: usize, flags: u32) -> isize;
             fn __errno_location() -> *mut i32;
+            fn uname(buf: *mut UtsName) -> i32;
+        }
+
+        /// `struct utsname` as glibc and musl define it on Linux: six
+        /// NUL-terminated fields of 65 bytes each.
+        #[repr(C)]
+        struct UtsName {
+            sysname: [u8; 65],
+            nodename: [u8; 65],
+            release: [u8; 65],
+            version: [u8; 65],
+            machine: [u8; 65],
+            domainname: [u8; 65],
         }
 
         const EINTR: i32 = 4;
@@ -117,6 +147,12 @@ mod sys {
                     continue;
                 }
                 if e == ENOSYS {
+                    if !kernel_lacks_getrandom() {
+                        // The kernel has the syscall, so something
+                        // (a seccomp filter, a sandbox) blocked it.
+                        // Report that instead of switching sources.
+                        return Err(io::Error::from_raw_os_error(e));
+                    }
                     STATE.store(2, Ordering::Relaxed);
                     // Re-attempt the whole fill via /dev/urandom from
                     // the start of the unfilled region.
@@ -133,6 +169,29 @@ mod sys {
             use std::io::Read;
             let mut f = File::open("/dev/urandom")?;
             f.read_exact(buf)
+        }
+
+        /// True only when the running kernel is known to predate
+        /// `getrandom(2)` (added in Linux 3.17). An unreadable version
+        /// counts as "has it", so `ENOSYS` is then reported as an error.
+        fn kernel_lacks_getrandom() -> bool {
+            let mut uts = UtsName {
+                sysname: [0; 65],
+                nodename: [0; 65],
+                release: [0; 65],
+                version: [0; 65],
+                machine: [0; 65],
+                domainname: [0; 65],
+            };
+            // SAFETY: `uts` is a valid, writable `struct utsname` with
+            // the layout glibc and musl use on Linux.
+            if unsafe { uname(&mut uts) } != 0 {
+                return false;
+            }
+            match super::super::parse_kernel_version(&uts.release) {
+                Some(v) => v < (3, 17),
+                None => false,
+            }
         }
     }
 
@@ -254,6 +313,96 @@ mod sys {
                 "mod-rand tier3 has no entropy source on this platform",
             ))
         }
+    }
+}
+
+/// Parse the `major.minor` prefix of a NUL-terminated kernel release
+/// string such as `5.15.0-91-generic`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_kernel_version(release: &[u8]) -> Option<(u32, u32)> {
+    let end = release
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(release.len());
+    let s = core::str::from_utf8(&release[..end]).ok()?;
+    let mut parts = s.split(|c: char| !c.is_ascii_digit());
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+/// Number of OS reads made on this thread, for tests of batching.
+#[cfg(test)]
+mod test_counter {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn bump() {
+        CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(super) fn take() -> usize {
+        CALLS.with(|c| c.replace(0))
+    }
+}
+
+/// Random `u64` words read from the OS in batches, for one call.
+///
+/// Reads at most 32 words per syscall, and only as many as
+/// the caller said it needs (plus a refill on the rare rejection).
+/// Lives on the stack for one public call; nothing is kept afterwards.
+const WORDS_MAX: usize = 32;
+
+struct Words {
+    buf: [u8; WORDS_MAX * 8],
+    pos: usize,
+    len: usize,
+    remaining: usize,
+}
+
+impl Words {
+    /// A source for about `needed` words.
+    fn new(needed: usize) -> Self {
+        Self {
+            buf: [0; WORDS_MAX * 8],
+            pos: 0,
+            len: 0,
+            remaining: needed,
+        }
+    }
+
+    fn next(&mut self) -> io::Result<u64> {
+        if self.pos == self.len {
+            let words = self.remaining.clamp(1, WORDS_MAX);
+            let bytes = words * 8;
+            fill_bytes(&mut self.buf[..bytes])?;
+            self.pos = 0;
+            self.len = bytes;
+        }
+        let mut w = [0u8; 8];
+        w.copy_from_slice(&self.buf[self.pos..self.pos + 8]);
+        self.buf[self.pos..self.pos + 8].fill(0);
+        self.pos += 8;
+        self.remaining = self.remaining.saturating_sub(1);
+        Ok(u64::from_le_bytes(w))
+    }
+
+    /// Uniform value in `[0, n)` by Lemire's method. `n > 0`.
+    fn bounded(&mut self, n: u64) -> io::Result<u64> {
+        debug_assert!(n != 0, "Words::bounded requires n > 0");
+        let mut m: u128 = (self.next()? as u128).wrapping_mul(n as u128);
+        let mut l: u64 = m as u64;
+        if l < n {
+            let t: u64 = n.wrapping_neg() % n;
+            while l < t {
+                m = (self.next()? as u128).wrapping_mul(n as u128);
+                l = m as u64;
+            }
+        }
+        Ok((m >> 64) as u64)
     }
 }
 
@@ -1039,8 +1188,8 @@ fn invalid_charset_error(msg: &'static str) -> io::Error {
 /// Selection uses Lemire rejection sampling against `charset.len()`,
 /// so the per-character distribution is uniform — no modulo bias.
 ///
-/// Each character costs one rejection-sampled draw (typically one
-/// `random_u64` syscall in the common case).
+/// Random words are read from the OS up to 256 bytes per syscall, so
+/// a string of up to 32 characters usually costs one syscall.
 ///
 /// # Errors
 ///
@@ -1069,8 +1218,9 @@ pub fn random_string(len: usize, charset: &[u8]) -> io::Result<String> {
     }
     let n = charset.len() as u64;
     let mut out = String::with_capacity(len);
+    let mut words = Words::new(len);
     for _ in 0..len {
-        let idx = bounded_u64(n)? as usize;
+        let idx = words.bounded(n)? as usize;
         out.push(charset[idx] as char);
     }
     Ok(out)
@@ -1155,7 +1305,8 @@ pub fn random_hex_string(len: usize) -> io::Result<String> {
 ///
 /// Every permutation of `slice` is equally likely under the OS
 /// CSPRNG. O(n) time, no allocation. Each swap consumes one
-/// `random_u64` worth of entropy from Tier 3.
+/// `random_u64` worth of entropy from Tier 3; the words are read up to
+/// 32 at a time, so a 52-card deck costs two syscalls.
 ///
 /// # Errors
 ///
@@ -1177,11 +1328,12 @@ pub fn shuffle<T>(slice: &mut [T]) -> io::Result<()> {
     if n < 2 {
         return Ok(());
     }
+    let mut words = Words::new(n - 1);
     for i in (1..n).rev() {
         // Pick j uniformly in [0, i]. i fits in u64 because n <= usize::MAX
         // and usize <= u64 on every supported target.
         let span = (i as u64) + 1;
-        let j = bounded_u64(span)? as usize;
+        let j = words.bounded(span)? as usize;
         slice.swap(i, j);
     }
     Ok(())
@@ -1191,6 +1343,57 @@ pub fn shuffle<T>(slice: &mut [T]) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn strings_and_shuffle_batch_os_reads() {
+        let _ = test_counter::take();
+        let t = random_alphanumeric(32).unwrap();
+        assert_eq!(t.len(), 32);
+        assert_eq!(test_counter::take(), 1, "32 characters, one OS read");
+
+        let t = random_string(100, crate::charsets::HEX_LOWER).unwrap();
+        assert_eq!(t.len(), 100);
+        assert_eq!(test_counter::take(), 4, "100 characters, four OS reads");
+
+        let mut deck: Vec<u8> = (0..52).collect();
+        shuffle(&mut deck).unwrap();
+        assert_eq!(test_counter::take(), 2, "51 swaps, two OS reads");
+        let mut sorted = deck.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..52).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn words_bounded_is_in_range_and_uniform_enough() {
+        let mut w = Words::new(60_000);
+        let mut counts = [0u32; 6];
+        for _ in 0..60_000 {
+            let v = w.bounded(6).unwrap();
+            counts[v as usize] += 1;
+        }
+        for c in counts {
+            assert!((9_000..=11_000).contains(&c), "count {c} out of band");
+        }
+    }
+
+    #[test]
+    fn kernel_version_parsing() {
+        assert_eq!(
+            parse_kernel_version(b"5.15.0-91-generic\0\0"),
+            Some((5, 15))
+        );
+        assert_eq!(
+            parse_kernel_version(b"5.15.167.4-microsoft-standard-WSL2\0"),
+            Some((5, 15))
+        );
+        assert_eq!(parse_kernel_version(b"3.16.0\0"), Some((3, 16)));
+        assert_eq!(parse_kernel_version(b"3.17\0"), Some((3, 17)));
+        assert_eq!(parse_kernel_version(b"6.1"), Some((6, 1)));
+        assert_eq!(parse_kernel_version(b"\0"), None);
+        assert_eq!(parse_kernel_version(b"linux\0"), None);
+        assert!(parse_kernel_version(b"3.16.0\0").unwrap() < (3, 17));
+        assert!(parse_kernel_version(b"4.4.0\0").unwrap() >= (3, 17));
+    }
 
     #[test]
     fn fill_bytes_produces_output() {

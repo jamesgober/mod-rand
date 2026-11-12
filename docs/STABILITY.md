@@ -64,8 +64,11 @@ of the following requires `2.0.0`:
   effectively format-level — re-ordering or substituting any byte is
   a breaking change).
 - A change to the documented invariants of Tier 2 or Tier 3 (e.g., if
-  Tier 2's "every call in the same process returns a distinct value"
-  were ever weakened, that's `2.0.0`).
+  Tier 3 ever fell back to a non-cryptographic source, that's `2.0.0`).
+  Note: before `1.1.0` the docs claimed every Tier 2 `unique_u64` call
+  in a process returns a distinct value. The code never guaranteed that
+  across clock ticks (collisions follow the 64-bit birthday bound), so
+  `1.1.0` corrected the docs; the behaviour did not change.
 
 ## Determinism on Tier 1
 

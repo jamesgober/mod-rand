@@ -9,7 +9,7 @@
 //!   returned `String` is valid UTF-8 by construction).
 //! - Distributes each character uniformly over the charset.
 //! - Rejects invalid charsets (empty / non-ASCII).
-
+#![allow(deprecated)]
 #![cfg(all(feature = "tier2", feature = "tier3"))]
 
 use mod_rand::charsets;

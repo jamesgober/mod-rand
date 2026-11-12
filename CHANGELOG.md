@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-12
+
+### Security
+
+- On Linux, an `ENOSYS` from `getrandom` no longer switches the
+  process to `/dev/urandom` when the kernel is 3.17 or newer. On
+  those kernels the syscall exists, so `ENOSYS` means a sandbox
+  blocked it, and tier 3 now returns that error as documented. The
+  `/dev/urandom` path is kept for kernels older than 3.17, where the
+  syscall does not exist. A process whose sandbox reports `ENOSYS`
+  for `getrandom` now gets errors from tier 3 instead of output from
+  another source; allow `getrandom` in the sandbox profile.
+- Deprecated `tier2::random_string`, `random_alphanumeric`,
+  `random_alpha`, `random_numeric` and `random_hex_string`. They
+  share names with the tier 3 functions but their output is
+  predictable. They keep working through `1.x`; the deprecation note
+  points at the tier 3 function to use.
+- Docs no longer suggest tier 1 or tier 2 for tokens, passwords or
+  temp names in shared directories. The README examples that named
+  tier 1 and tier 2 output `token` are fixed.
+
+### Added
+
+- Plain-named modules: `mod_rand::secure` (tier 3),
+  `mod_rand::unique` (tier 2, without the deprecated string
+  functions) and `mod_rand::seeded` (tier 1). They re-export the
+  tier modules, so either name works.
+
+### Changed
+
+- Tier 3 `random_string`, `random_alphanumeric`, `random_alpha`,
+  `random_numeric`, `random_hex_string` and `shuffle` read random
+  words up to 256 bytes per syscall instead of one syscall per
+  character or swap. Output distribution is unchanged, and nothing is
+  buffered between calls, so tier 3 stays fork and snapshot safe.
+
+### Fixed
+
+- The tier 2 docs claimed `unique_u64` never repeats in a process.
+  Values from the same clock tick never repeat; across ticks they are
+  distinct with high probability only (birthday bound, likely after
+  about `2^32` calls). The docs now say so, and note that short
+  `unique_name` / `unique_hex` strings repeat much sooner.
+- Stale crate docs: the status section described the `0.9` line,
+  and the `docs/API.md` install snippets pinned `0.9`.
+
+### Compatibility
+
+- Additive only; deprecated items keep working. MSRV stays at Rust
+  `1.75`.
+
 ## [1.0.0] - 2026-05-18
 
 The `1.0` release pins the public API for the entire `1.x` line.
@@ -476,7 +527,8 @@ This was the name-claim release. The real implementations land in
 **Do not use tier3 from `v0.1.0` for security-sensitive work.** The
 placeholder is not cryptographically secure. Upgrade to `0.9.2+`.
 
-[Unreleased]: https://github.com/jamesgober/mod-rand/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-rand/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/jamesgober/mod-rand/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/jamesgober/mod-rand/compare/v0.9.5...v1.0.0
 [0.9.5]: https://github.com/jamesgober/mod-rand/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/jamesgober/mod-rand/compare/v0.9.3...v0.9.4
