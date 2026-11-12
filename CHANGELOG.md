@@ -383,8 +383,6 @@ per call on commodity hardware.
   all distinct), and Tier 3 stress under multi-thread load.
 - Thread-safety notes in Tier 2 and Tier 3 module docs making the
   guarantee explicit.
-- `.dev/AUDIT.md` — self-audit report against `DIRECTIVES.md` and
-  `REPS.md` (local-only).
 
 ### Performance
 
